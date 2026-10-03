@@ -42,13 +42,27 @@ function rateLimited(ip: string): boolean {
 	return false;
 }
 
+/**
+ * CSP for every response. `connect-src 'self'` does NOT cover ws:// or wss://
+ * in several browsers (MDN says so explicitly), which left the dashboard
+ * refusing its own websocket and reconnecting forever. We name the host we
+ * are actually serving on, sanitized, so the channel stays same-origin.
+ */
+function cspFor(res: ServerResponse): string {
+	const req = (res as unknown as { req?: IncomingMessage }).req;
+	const host = String(req?.headers.host ?? "");
+	const safeHost = host.length <= 255 && /^[A-Za-z0-9.\-_\[\]:]+$/.test(host);
+	const connect = safeHost ? `connect-src 'self' ws://${host} wss://${host}` : "connect-src 'self'";
+	return `default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' 'self'; ${connect}`;
+}
+
 function send(res: ServerResponse, status: number, body: string, type = "application/json", extraHeaders: Record<string, string> = {}): void {
 	res.writeHead(status, {
 		"Content-Type": type,
 		"X-Content-Type-Options": "nosniff",
 		"X-Frame-Options": "DENY",
 		"Referrer-Policy": "no-referrer",
-		"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' 'self'; connect-src 'self'",
+		"Content-Security-Policy": cspFor(res),
 		"Cache-Control": "no-store",
 		...extraHeaders,
 	});

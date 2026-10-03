@@ -87,11 +87,14 @@ describe("LLM exposure", () => {
 		expect(String(props.path?.description)).toContain("refused values");
 	});
 
-	test("runtime-disabled tools vanish from the model's list and are refused", async () => {
-		registry.setEnabled("docker_exec", false);
-		const names = registryToAgentTools(registry, ctx, db).map((d) => d.name);
-		expect(names).not.toContain("docker_exec");
-		expect(await failureOf("docker_exec", { container: "web", command: "ls" })).toContain("disabled");
+	test("a runtime-disabled tool is refused at call time", async () => {
+		// the list itself is static (built at startup); per-ask hiding happens in
+		// agent.toolFilter, see openai.test / brain.test. Calls are re-checked here.
+		registry.setEnabled("fetch_json", false);
+		expect(await failureOf("fetch_json", { url: "http://127.0.0.1/" })).toContain("disabled");
+
+		registry.setEnabled("fetch_json", true);
+		expect(await failureOf("fetch_json", { url: "http://127.0.0.1/" })).not.toContain("disabled");
 	});
 
 	test("the registry still refuses malformed arguments before the sandbox runs", async () => {

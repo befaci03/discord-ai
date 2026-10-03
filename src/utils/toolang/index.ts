@@ -50,8 +50,11 @@ export async function executeToolSource(source: string, args: Record<string, unk
 		const data = await runFromSource(code, args, ctx);
 		return { success: true, data }
 	} catch (err) {
-		if (err instanceof RuntimeError || err instanceof Error) return { success: false, data: null, error: err.message };
-		return { success: false, data: null, error: String(err) }
+		// cap the message: it is echoed back to the model, and a giant one would
+		// eat the request budget (or the whole context)
+		const msg = (err instanceof Error ? err.message : String(err)).slice(0, 2_000);
+		if (err instanceof RuntimeError || err instanceof Error) return { success: false, data: null, error: msg };
+		return { success: false, data: null, error: msg }
 	}
 }
 

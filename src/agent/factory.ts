@@ -94,10 +94,11 @@ function argsToSchema(args: ToolDef["arguments"]): Record<string, unknown> {
 }
 
 /**
- * Expose the enabled TooLang tools to the LLM. The registry re-checks the
- * enabled flag at call time (runTool), so a dashboard toggle or a config
- * disable takes effect on the very next call. Every run is recorded like the
- * `!toolname` path does, with `agent` as the actor.
+ * Expose the loaded TooLang tools to the LLM. Runtime state is NOT baked in:
+ * `agent.toolFilter` (index.ts) decides per ask, so a dashboard toggle hides or
+ * shows the tool immediately, both in the prompt and in the schema. Calls are
+ * re-checked anyway by runTool. Every run is recorded like the `!toolname`
+ * path does, with `agent` as the actor.
  *
  * docker tools are dropped while `[docker].enabled = false`: offering four
  * tools that can only answer "docker is disabled" is noise, the config page
@@ -106,7 +107,7 @@ function argsToSchema(args: ToolDef["arguments"]): Record<string, unknown> {
 export function registryToAgentTools(registry: ToolRegistry, ctx: ToolContext, db: DB): Tool[] {
 	const dockerEnabled = ctx.config.docker.enabled === true;
 	return registry
-		.enabledAll()
+		.all()
 		.filter((t) => dockerEnabled || !t.name.startsWith("docker_"))
 		.map((t) => ({
 		name: t.name,

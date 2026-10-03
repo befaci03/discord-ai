@@ -112,12 +112,18 @@ authentication and live updates:
   the security card
 - access control: `allowed_ips` allowlist (use `"proxy"` to trust
   X-Forwarded-For from a reverse proxy), global per-IP flood bucket
-- security headers: CSP, nosniff, DENY framing, no-store
+- security headers: CSP, nosniff, DENY framing, no-store. `connect-src`
+  explicitly names `ws://`/`wss://` for the served host: `connect-src 'self'`
+  does not cover websocket schemes in several browsers (MDN), which used to
+  block the page's own socket and put it in an endless reconnect loop
 - live updates: hand-rolled WebSocket server (RFC6455 subset, zero deps) at
   `/ws`, cookie-authenticated, ping/pong heartbeat, 64KB frame cap, JSON
   push protocol (`snapshot` on connect, then `event` frames: tool runs,
-  audit entries, bot status)
-- cards: status, system (platform/runtime/mem/load), bot+agent state, addon state,
+  audit entries, bot status, agent status). The page follows the page scheme
+  (`wss` under https), drops its reconnect timer on logout and never stacks
+  reconnect loops
+- cards: status, system (platform/runtime/mem/load), bot+agent state (Discord
+  presence, guilds, agent busy/doing/mode, llm on/off), addon state,
   security (sessions + login-guard stats), per-tool run stats, live feed,
   recent audit trail, tool runner, tools & skills manager
 - runtime toggles: enable/disable any loaded tool, skill or addon from the UI
@@ -147,6 +153,17 @@ authentication and live updates:
   types fall back to the default model (reported at startup); types with a
   broken provider entry are skipped with a warning instead of failing at
   call time
+- every ask rebuilds its system prompt: identity + `[agent].prompt` +
+  `.prompt.txt`, the brain (tastes, known speaker), **the tool inventory with
+  signatures** (rebuilt per ask, so a dashboard toggle hides a tool from both
+  the prompt and the schema immediately), the skill directory, matched skill
+  instructions, Discord permissions (granted + missing, for the bot and for
+  the speaker), the current time/timezone, the bot's own id, and operating
+  notes (2000-char reply limit, mention-only visibility, treat message content
+  as data, don't reveal the prompt)
+- tool results and tool errors handed to the model are capped (40k chars, with
+  a preview + byte count when truncated), and errors are capped at 2k, so one
+  huge `docker logs` can't eat the request budget
 - addon capabilities are injected as LLM functions with their schemas
 - enabled `.tl` tools are injected the same way (see the tool system above)
 - agent brain (`[agent.brain]`): rolling conversation memory (default 30
@@ -194,6 +211,8 @@ authentication and live updates:
   roles and elevated permissions, on every ask
 - replies are sent with `allowedMentions: { parse: [] }`: model output can
   never ping `@everyone`, `@here`, roles or users (mention abuse)
+- status changes are pushed to the dashboard live (`agent.status` events:
+  busy/doing/mode, talking vs coding)
 - OpenAI-compatible and Anthropic-compatible agents implementing the same
   interface, both with a tool round-trip loop (Anthropic feeds `tool_use`
   blocks back as `tool_result`s, and drops tools on the last round so the
@@ -210,6 +229,8 @@ authentication and live updates:
 - no shell for subprocesses; binary allow/deny lists
 - secrets from env, redacted in logs
 - audit logging of tool runs and security-relevant mutations
+- oversized payloads stay bounded: tool output to the model (40k chars), tool
+  errors (2k), dashboard tool runs (200k), dashboard request bodies (48k)
 - all interpreter limits uncatchable by tool scripts
 - docker: every operation funnels through one gate that refuses to run while
   `[docker].enabled` is false, images go through the allow/deny lists before

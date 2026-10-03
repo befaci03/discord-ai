@@ -15,6 +15,7 @@ import { createDB } from "./db/index.js";
 import { ToolRunRow, AuditRow } from "./db/struct.js";
 import { startBot } from "./bot.js";
 import { ToolContext } from "./modules/types.js";
+import { DashboardDeps } from "./dashboard/handlers.js";
 // .env is loaded natively by Bun (shell env still wins over the file)
 
 async function main(): Promise<void> {
@@ -106,7 +107,7 @@ async function main(): Promise<void> {
 	db.setOnAudit((entry: AuditRow) => live.emit({ kind: "audit", action: entry.action, actor: entry.actor_id, target: entry.target }));
 
 	const dashLog = log.child("dashboard");
-	const deps = {
+	const deps: DashboardDeps = {
 		config, db, tools, skills, addons,
 		log: (level: "info" | "warn" | "error", m: string) => dashLog[level](m),
 		live,
@@ -135,8 +136,21 @@ async function main(): Promise<void> {
 	agentTools.push(...registryToAgentTools(tools, toolCtx, db));
 	const agent = buildAgent(db, config, agentTools, log); // appends the brain tools
 	log.info(`agent functions: ${agentTools.map((t) => t.name).join(", ") || "(none)"}`);
+	deps.agentState = () => agent?.status;
+	// runtime truth for the model: a tool/skill toggle in the dashboard hides the
+	// tool from the system prompt AND from the schema sent to the provider
+	if (agent) {
+		agent.toolFilter = (name: string) => {
+			if (name.startsWith("brain_")) return true; // the brain's own tools, always there
+			if (tools.get(name) !== undefined) return tools.isEnabled(name); // a .tl tool
+			return addons.functionEnabled(name); // an addon function
+		};
+	}
 
 	const client = await startBot({ config, db, tools, skills, addons, log, agent, live, toolCtx });
+	// the status card reads deps.client on every request: without this the
+	// dashboard showed "discord: offline" forever, even with the bot connected
+	deps.client = client;
 	void client;
 
 	// graceful shutdown: close the database cleanly on SIGINT/SIGTERM

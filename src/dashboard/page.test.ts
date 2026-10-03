@@ -28,6 +28,17 @@ describe("dashboard inline script", () => {
 		expect(html).toMatch(/onclick="[^"]*login\(/);
 	});
 
+	test("the websocket follows the page scheme (wss behind https)", () => {
+		const code = inlineScript();
+		// hardcoded ws:// dies under a reverse proxy or the cloudflared tunnel:
+		// the browser blocks it as mixed content and reconnects forever
+		expect(code).toContain('location.protocol === "https:" ? "wss://" : "ws://"');
+		expect(code).not.toContain('new WebSocket("ws://" + location.host');
+		// an intentional close must not schedule another reconnect loop
+		expect(code).toContain("wsWanted");
+		expect(code).toContain("function disconnectWs");
+	});
+
 	test("toggle buttons keep their quotes escaped", () => {
 		const html = renderDashboard();
 		// the old bug: `onclick="toggle('tool',...)"` built inside a single-quoted

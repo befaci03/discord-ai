@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import SQLiteDB from "../db/sqlite.js";
-import { Brain, MEMORY_DEFAULT, looksLikeCode } from "./struct.js";
+import { Brain, MEMORY_DEFAULT, looksLikeCode, Tool } from "./struct.js";
 
 let dir: string;
 const opened: SQLiteDB[] = [];
@@ -143,6 +143,40 @@ describe("[agent.brain] seeding", () => {
 		expect(suffix).toContain("you like: rust");
 		expect(suffix).not.toContain("php");
 		expect((await fresh.getPerson("123456789012345678")).description).toBe("");
+	});
+});
+
+describe("tool inventory in the prompt", () => {
+	const tools: Tool[] = [
+		{
+			name: "fetch_json",
+			description: "Fetch a URL and parse the response as JSON",
+			parameters: { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
+			invoker: async () => null,
+		},
+		{ name: "server_stats", description: "Overview of the server", invoker: async () => null },
+	];
+
+	test("lists every callable tool with its arguments", async () => {
+		const brain = new Brain(await freshDb(), tools);
+		const block = brain.toolsBlock();
+		expect(block).toContain("### Tools you can call right now");
+		expect(block).toContain("- fetch_json(url): Fetch a URL");
+		expect(block).toContain("- server_stats(): Overview");
+		expect(block).toContain("instead of writing code");
+	});
+
+	test("an empty toolbox says so instead of pretending", async () => {
+		const block = new Brain(await freshDb()).toolsBlock();
+		expect(block).toContain("no tools available");
+	});
+
+	test("the runtime filter drops toggled-off tools from the block", async () => {
+		const brain = new Brain(await freshDb(), tools);
+		brain.toolFilter = (name) => name !== "fetch_json";
+		const block = brain.toolsBlock();
+		expect(block).not.toContain("fetch_json");
+		expect(block).toContain("server_stats");
 	});
 });
 

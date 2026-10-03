@@ -10,6 +10,7 @@ import { SkillRegistry } from "../modules/skills.js";
 import { AddonRegistry, availableAddons } from "../modules/addons.js";
 import { ToolContext } from "../modules/types.js";
 import { llmAvailable } from "../agent/factory.js";
+import { AgentStatus } from "../agent/struct.js";
 import { LiveBus } from "./live.js";
 
 export interface DashboardDeps {
@@ -21,6 +22,8 @@ export interface DashboardDeps {
 	log: (level: "info" | "warn" | "error", message: string) => void;
 	/** discord client once connected, for presence/guild info */
 	client?: unknown;
+	/** live agent status (busy/doing/mode) once the agent is built */
+	agentState?: () => AgentStatus | undefined;
 	/** live event bus, optional in tests */
 	live?: LiveBus;
 	/** called after a successful toggle, so runtime state can be persisted */
@@ -101,6 +104,20 @@ function coerceArgs(raw: Record<string, unknown>, argDefs: { name: string; type:
 	return out;
 }
 
+/** One tool run's payload sent to the browser: capped, never a flood. */
+const MAX_RUN_BYTES = 200_000;
+
+function capResult(result: unknown): unknown {
+	let json = "";
+	try {
+		json = JSON.stringify(result) ?? String(result);
+	} catch {
+		return { unserializable: true };
+	}
+	if (json.length <= MAX_RUN_BYTES) return result;
+	return { truncated: true, bytes: json.length, preview: json.slice(0, 2_000) };
+}
+
 export function systemInfo() {
 	const mem = { total: os.totalmem(), free: os.freemem() };
 	// Bun reports a Node-compatible process.version; show the real runtime
@@ -135,7 +152,11 @@ export async function handleApi(req: IncomingMessage, deps: DashboardDeps, path:
 					enabled_addons: config.addons.enabled,
 					known_addons: availableAddons(),
 					health: systemInfo(),
-					agent: { name: config.agent.name, llm: llmAvailable(config) ? "configured" : "off" },
+					agent: {
+						name: config.agent.name,
+						llm: llmAvailable(config) ? "configured" : "off",
+						...(deps.agentState?.() ?? {}),
+					},
 					bot: {
 						online: !!client?.user,
 						user: client?.user?.tag ?? null,
@@ -222,7 +243,7 @@ export async function handleApi(req: IncomingMessage, deps: DashboardDeps, path:
 				await db.recordToolRun({ tool: name, caller_id: "dashboard", success: 1, error: "", duration_ms: ms });
 				await db.audit({ actor_id: "dashboard", action: "tool.run", target: name, details: "{}" });
 				live?.emit({ kind: "tool.run", tool: name, caller: "dashboard", ok: true, ms });
-				return { status: 200, body: { ok: true, data: result } };
+				return { status: 200, body: { ok: true, data: capResult(result) } };
 			} catch (err) {
 				const ms = Date.now() - started;
 				await db.recordToolRun({ tool: name, caller_id: "dashboard", success: 0, error: (err as Error).message.slice(0, 200), duration_ms: ms });

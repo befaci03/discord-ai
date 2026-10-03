@@ -167,6 +167,22 @@ export class SkillRegistry {
 		return `You have activated the following skills. Follow their instructions.\n\n${parts.join("\n")}`;
 	}
 
+	/**
+	 * Short directory of the enabled skills, for the system prompt: the model
+	 * only sees a skill's full instructions once its trigger matched, so it
+	 * otherwise has no idea the skill exists.
+	 */
+	overview(maxSkills = 10, maxChars = 1_500): string {
+		const list = this.enabledAll().slice(0, maxSkills);
+		if (list.length === 0) return "";
+		const lines = list.map((s) => {
+			const triggers = s.triggers.slice(0, 5).join(", ");
+			return `- ${s.name}: ${s.description.replace(/\s+/g, " ").slice(0, 120)}${triggers ? ` [keywords: ${triggers}]` : ""}`;
+		});
+		const body = lines.join("\n").slice(0, maxChars);
+		return `Skills loaded (their full instructions are injected automatically when your message hits one):\n${body}`;
+	}
+
 	get(name: string): LoadedSkill | undefined {
 		return this.skills.get(name);
 	}

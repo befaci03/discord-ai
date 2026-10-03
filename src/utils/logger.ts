@@ -40,8 +40,11 @@ export class Logger {
 	}
 
 	private write(level: Level, args: unknown[]): void {
+		// below the configured level: not even written to the file sink, otherwise
+		// logging.file collects debug spam that the console never shows
+		if (LEVEL_ORDER[level] < LEVEL_ORDER[this.level]) return;
 		const line = `[${new Date().toISOString()}] [${level.toUpperCase()}] [${this.scope}] ${redact(args.map(fmt).join(" "))}`;
-		if (LEVEL_ORDER[level] >= LEVEL_ORDER[this.level]) {
+		{
 			const target = level === "error" ? console.error : level === "warn" ? console.warn : console.log;
 			target(line);
 		}

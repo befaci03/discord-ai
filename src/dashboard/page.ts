@@ -94,7 +94,7 @@ export function renderDashboard(): string {
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let ws = null, wsTimer = null, clockTimer = null;
+let ws = null, wsTimer = null, clockTimer = null, wsWanted = false;
 
 async function j(url, opts) {
 	const r = await fetch(url, opts);
@@ -104,7 +104,7 @@ async function j(url, opts) {
 	return b;
 }
 
-function showLogin() { $("login").hidden = false; $("app").hidden = true; if (ws) { ws.close(); ws = null; } }
+function showLogin() { $("login").hidden = false; $("app").hidden = true; disconnectWs(); }
 function showApp() {
 	$("login").hidden = true; $("app").hidden = false;
 	loadAll(); connectWs();
@@ -134,19 +134,38 @@ function setWs(ok, text) {
 }
 
 function connectWs() {
-	if (ws) { ws.close(); }
+	// always drop the previous attempt first: otherwise every reconnect stacks
+	// another timer and an old socket can schedule a second loop
+	if (wsTimer) { clearTimeout(wsTimer); wsTimer = null; }
+	if (ws) { ws.onclose = null; try { ws.close(); } catch (e) {} ws = null; }
+	wsWanted = true;
 	setWs(false, "connecting...");
-	ws = new WebSocket("ws://" + location.host + "/ws");
+	// follow the page scheme: wss when the dashboard is served over https
+	// (reverse proxy / tunnel), ws on plain http. Hardcoded ws:// dies there.
+	const scheme = location.protocol === "https:" ? "wss://" : "ws://";
+	ws = new WebSocket(scheme + location.host + "/ws");
 	ws.onopen = () => setWs(true, "live");
 	ws.onmessage = (ev) => {
 		try {
 			const m = JSON.parse(ev.data);
 			if (m.type === "snapshot") applySnapshot(m.data);
 			else if (m.type === "event") pushEvent(m.data);
-		} catch {}
+		} catch (e) {}
 	};
-	ws.onclose = () => { setWs(false, "reconnecting..."); wsTimer = setTimeout(connectWs, 3000); };
-	ws.onerror = () => ws.close();
+	ws.onclose = () => {
+		if (!wsWanted) return; // we closed it on purpose (logout / reconnect)
+		setWs(false, "reconnecting...");
+		wsTimer = setTimeout(connectWs, 3000);
+	};
+	ws.onerror = () => { try { ws.close(); } catch (e) {} };
+}
+
+function disconnectWs() {
+	// intentional close: no reconnect, no leftover timer
+	wsWanted = false;
+	if (wsTimer) { clearTimeout(wsTimer); wsTimer = null; }
+	if (ws) { ws.onclose = null; try { ws.close(); } catch (e) {} ws = null; }
+	setWs(false, "offline");
 }
 
 function pushEvent(ev) {
@@ -168,6 +187,7 @@ function pushEvent(ev) {
 	feed.prepend(line);
 	while (feed.children.length > 60) feed.lastElementChild.remove();
 		if (ev.kind === "tool.run") loadStats();
+		if (ev.kind === "bot.status" || ev.kind === "agent.status") loadStatus();
 		if (ev.kind === "audit") {
 			loadAudit();
 			const action = String(ev.action);
@@ -212,11 +232,14 @@ function renderStatus(s) {
 		'<div class="kv"><span>runtime</span><span>' + esc(sys.runtime || sys.node || '') + '</span></div>' +
 		'<div class="kv"><span>memory</span><span>' + (sys.memUsedPct ?? '?') + '% of ' + (sys.memTotalMb ?? '?') + 'MB</span></div>' +
 		'<div class="kv"><span>load (1m)</span><span>' + (sys.load1m ?? '?') + '</span></div>';
+	const ag = s.agent || {};
 	$("bot").innerHTML =
 		'<div class="kv"><span>discord</span><span class="' + (bot.online ? 'ok' : 'warn') + '">' + (bot.online ? esc(bot.user || 'online') : 'offline') + '</span></div>' +
 		'<div class="kv"><span>guilds</span><span>' + (bot.guilds ?? 0) + '</span></div>' +
 		'<div class="kv"><span>presence</span><span class="dim">' + esc(bot.status_text || '') + '</span></div>' +
-		'<div class="kv"><span>agent</span><span>' + esc((s.agent || {}).name || '') + '</span></div>';
+		'<div class="kv"><span>agent</span><span>' + esc(ag.name || '') + '</span></div>' +
+		'<div class="kv"><span>agent state</span><span class="' + (ag.busy ? 'ok' : 'dim') + '">' + esc(ag.busy ? ((ag.doing || 'busy') + ' (' + (ag.mode || 'idle') + ')') : 'idle') + '</span></div>' +
+		'<div class="kv"><span>llm</span><span class="' + (ag.llm === 'configured' ? 'ok' : 'warn') + '">' + esc(ag.llm || 'off') + '</span></div>';
 }
 
 function renderSecurity(sessions, login) {
@@ -285,10 +308,20 @@ async function loadAudit() {
 	} catch (e) { if (e.message !== "locked") $("audit").innerHTML = '<span class="err">' + esc(e.message) + '</span>'; }
 }
 
-async function loadAll() {
+async function loadStatus() {
+	// never reject: pushEvent calls this from live events, an unhandled promise
+	// rejection there would just vanish (401 is handled by j() itself)
 	try {
 		const s = await j("/api/status");
 		renderStatus(s);
+	} catch (e) {
+		if (e.message !== "locked") $("status").innerHTML = '<span class="err">' + esc(e.message) + '</span>';
+	}
+}
+
+async function loadAll() {
+	try {
+		await loadStatus();
 		const tools = await j("/api/tools");
 		toolsCache = tools;
 		const addons = await j("/api/addons");

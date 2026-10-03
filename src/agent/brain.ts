@@ -3,7 +3,7 @@
 // seeded from [agent.brain] in the config.
 
 import type DB from "../db/struct.js";
-import type { AuthorCustomData, Message, ModelType } from "./struct.js";
+import type { AgentStatus, AuthorCustomData, Message, ModelType, Tool } from "./struct.js";
 
 /** One remembered conversation turn. */
 export interface ChatTurn {
@@ -16,6 +16,7 @@ export const MEMORY_DEFAULT = 30;
 const LIST_CAP = 50; // preferences/people list caps keep the prompt bounded
 const ITEM_CAP = 120;
 const PEOPLE_CAP = 100; // remembered profiles (and the index used to reset them)
+const TOOL_RESULT_CAP = 40_000; // chars of one tool result handed to the model
 
 /** Saved/seeded profile of one person. */
 export interface PersonSeed {
@@ -77,13 +78,86 @@ export class Brain {
 	seed: BrainSeed = {};
 	/** true = drop saved brain state on first use and re-seed from `seed` */
 	reseed = false;
+	/** live status shown on the dashboard (set through setStatus) */
+	status: AgentStatus = { busy: false, doing: "nothing much, just looking at messages", mode: "idle" };
+	/** optional: notified on every status change (the bot wires this to the dashboard) */
+	onStatus: ((status: AgentStatus) => void) | null = null;
+	/** tools this agent may call: kept here so the prompt can list them per ask */
+	protected tools: Tool[];
+	/**
+	 * runtime tool filter, set by index.ts: a tool toggled off in the dashboard
+	 * disappears from BOTH the system prompt and the schema sent to the model,
+	 * instead of being listed and then refused.
+	 */
+	toolFilter: ((name: string) => boolean) | null = null;
 
 	private db: DB;
 	private selfLoaded = false;
 	private initP: Promise<void> | null = null;
 
-	constructor(db: DB) {
+	constructor(db: DB, tools: Tool[] = []) {
 		this.db = db;
+		this.tools = tools;
+	}
+
+	/** Tools that are callable right now (after the runtime filter). */
+	protected callableTools(): Tool[] {
+		if (!this.toolFilter) return this.tools;
+		return this.tools.filter((t) => this.toolFilter!(t.name));
+	}
+
+	/** Update the status and tell the dashboard about it (never throws). */
+	protected setStatus(patch: Partial<AgentStatus>): void {
+		this.status = { ...this.status, ...patch };
+		try {
+			this.onStatus?.(this.status);
+		} catch {
+			/* a broken dashboard hook must never break a chat */
+		}
+	}
+
+	/**
+	 * Serialize one tool result for the model, capped: a 4MB docker log would
+	 * otherwise be pasted into the next request and get it rejected (or eat the
+	 * context). Oversized payloads come back as a preview + byte count.
+	 */
+	protected toolResultText(result: unknown): string {
+		let text: string;
+		try {
+			text = JSON.stringify(result) ?? String(result);
+		} catch {
+			return '"[unserializable tool result]"';
+		}
+		if (text.length <= TOOL_RESULT_CAP) return text;
+		return JSON.stringify({ truncated: true, bytes: text.length, preview: text.slice(0, TOOL_RESULT_CAP) });
+	}
+
+	/**
+	 * Inventory of callable tools, rebuilt on every ask so runtime toggles are
+	 * reflected immediately. Without this the model had no idea it could call
+	 * anything and happily wrote its own code instead.
+	 */
+	toolsBlock(): string {
+		const callable = this.callableTools();
+		const list = callable.slice(0, 60);
+		if (list.length === 0) {
+			return "\n### Tools\nYou have no tools available right now: answer from your own knowledge and say when you are unsure.\n";
+		}
+		const lines = list.map((t) => {
+			const props = (t.parameters?.properties ?? {}) as Record<string, unknown>;
+			const args = Object.keys(props).join(", ");
+			const desc = t.description.replace(/\s+/g, " ").trim().slice(0, 160);
+			return `- ${t.name}(${args}): ${desc}`;
+		});
+		const more = callable.length > list.length ? `\n(+${callable.length - list.length} more)` : "";
+		return (
+			"\n### Tools you can call right now\n" +
+			"Use the tool-calling interface for these instead of writing code, guessing or pasting a snippet. " +
+			"If no tool fits the request, just answer normally, and never invent a tool that is not listed here.\n" +
+			lines.join("\n") +
+			more +
+			"\n"
+		);
 	}
 
 	// ---------------- conversation memory ----------------

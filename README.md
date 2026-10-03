@@ -39,9 +39,10 @@ return("hello {1}".format([args.who]))
 Call it from Discord: `@bot !greet who=world`
 
 Every **enabled** tool is also handed to the model as a function (the header
-arguments become the JSON schema), so the agent can use it on its own. Switch
-a tool off in the dashboard and it disappears from the model's list and is
-refused on the next call.
+arguments become the JSON schema), and listed in its system prompt with those
+same arguments as the signature, so it knows what it can call instead of
+writing its own code. Switch a tool off in the dashboard and it disappears
+from both the prompt and the schema, and is refused on the next call.
 
 Docs: [TooLang syntax](src/utils/toolang/docs/syntax.md) and
 [built-in modules](src/utils/toolang/docs/builtins.md). See

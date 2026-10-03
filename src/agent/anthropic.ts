@@ -3,14 +3,13 @@
 import { Anthropic } from "@anthropic-ai/sdk";
 import { ChatCompletion } from "openai/resources.mjs";
 import DB from "../db/struct.js";
-import Agent, { AskOptions, Brain, AgentStatus, Provider, Model, ModelType, Tool } from "./struct.js";
+import Agent, { AskOptions, Brain, Provider, Model, ModelType, Tool } from "./struct.js";
 import { Logger } from "../utils/logger.js";
 import { ExternalError } from "../utils/errors.js";
 
 /** Anthropic-flavoured agent exposing the same interface as the OpenAI one. */
 export default class extends Brain implements Agent {
 	private prov: Anthropic;
-	public status: AgentStatus;
 	private log: Logger;
 
 	constructor(
@@ -18,13 +17,12 @@ export default class extends Brain implements Agent {
 		api: Provider,
 		private models: Model[],
 		public sys_prompt: string,
-		private tools: Tool[] = [],
+		tools: Tool[] = [],
 		private maxToolRoundtrips = 4,
 		log?: Logger,
 	) {
-		super(db);
+		super(db, tools);
 		this.prov = new Anthropic({ apiKey: api.apiKey, baseURL: api.baseUrl || undefined });
-		this.status = { busy: false, doing: "nothing much, just looking at messages", mode: "idle" };
 		this.log = (log ?? new Logger()).child("agent.anthropic");
 	}
 
@@ -33,20 +31,23 @@ export default class extends Brain implements Agent {
 	 * of the project expects, so callers stay provider-agnostic.
 	 */
 	public async ask(prompt: string, system?: string, opts?: AskOptions): Promise<ChatCompletion> {
-		this.status = { ...this.status, busy: true, doing: "thinking" };
+		this.setStatus({ busy: true, doing: "thinking" });
 		try {
 			const ephemeral = opts?.ephemeral === true;
 			if (!ephemeral) await this.ensureMemory();
 			const model = this.getModel(this.routeModel(prompt, opts?.model));
-			this.status = { ...this.status, busy: true, doing: "thinking", mode: model.type === "coding" ? "coding" : "talking" };
+			this.setStatus({ busy: true, doing: "thinking", mode: model.type === "coding" ? "coding" : "talking" });
 			const suffix = ephemeral ? "" : await this.contextSuffix(opts?.speakerId);
-			const systemPrompt = this.sys_prompt + suffix + (system ?? "");
+			// identity + brain + tool inventory, then the situational context
+			const systemPrompt = this.sys_prompt + suffix + this.toolsBlock() + (system ?? "");
 			const messages: Anthropic.MessageParam[] = ephemeral
 				? [{ role: "user", content: prompt }]
 				: this.mergeTurns([...this.historyMessages(), { role: "user", content: prompt }]);
+			// only tools that are still enabled: dashboard toggles apply immediately
+			const callable = this.callableTools();
 			let toolsDef =
-				this.tools.length > 0
-					? this.tools.map((t) => ({
+				callable.length > 0
+					? callable.map((t) => ({
 						name: t.name,
 						description: t.description,
 						input_schema: (t.parameters ?? { type: "object", properties: {} }) as { type: "object"; properties: Record<string, unknown> },
@@ -66,12 +67,12 @@ export default class extends Brain implements Agent {
 				for (const use of toolUses) {
 					let out: string;
 					try {
-						const tool = this.tools.find((t) => t.name === use.name);
+						const tool = callable.find((t) => t.name === use.name);
 						if (!tool) throw new Error(`unknown tool ${use.name}`);
 						const result = await this.useTool(tool, (use.input ?? {}) as Record<string, unknown>);
-						out = JSON.stringify(result) ?? "ok";
+						out = this.toolResultText(result);
 					} catch (err) {
-						out = JSON.stringify({ error: err instanceof Error ? err.message : String(err) });
+						out = this.toolResultText({ error: err instanceof Error ? err.message : String(err) });
 					}
 					results.push({ type: "tool_result", tool_use_id: use.id, content: out });
 				}
@@ -115,7 +116,7 @@ export default class extends Brain implements Agent {
 			this.log.error("ask failed:", err instanceof Error ? err.message : err);
 			throw new ExternalError("anthropic", err);
 		} finally {
-			this.status = { busy: false, doing: "nothing much, just looking at messages", mode: "idle" };
+			this.setStatus({ busy: false, doing: "nothing much, just looking at messages", mode: "idle" });
 		}
 	}
 

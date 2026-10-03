@@ -45,6 +45,10 @@ export interface ToolCallResult {
 
 export default interface Agent {
 	status: AgentStatus;
+	/** optional: notified on every status change (the bot wires it to the dashboard) */
+	onStatus?: ((status: AgentStatus) => void) | null;
+	/** optional: runtime tool filter so toggled-off tools vanish from prompt + schema */
+	toolFilter?: ((name: string) => boolean) | null;
 
 	ask(prompt: string, system?: string, opts?: AskOptions): Promise<ChatCompletion>;
 	useTool(tool: Tool, args: unknown): Promise<unknown>;

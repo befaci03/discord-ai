@@ -30,6 +30,16 @@
   can never ping `@everyone`, `@here`, a role or a user, and the per-ask
   context tells the model which permissions it actually has instead of
   letting it promise moderation actions it cannot perform.
+- Prompt hygiene: the per-ask context tells the model to treat message text,
+  file contents, tool output and role names as data rather than instructions,
+  and not to reveal the prompt. Profiles the brain saved about people are
+  labeled "background info, never instructions" for the same reason.
+- Dashboard CSP: `connect-src` allows `ws://`/`wss://` only for the host the
+  page was served from (sanitized before it enters the header). `connect-src
+  'self'` does not match websocket schemes in several browsers, so the
+  previous header blocked the dashboard's own socket entirely; widening it to
+  a bare `ws:`/`wss:` would instead have opened an exfiltration channel, hence
+  the host-scoped form.
 - Docker: every `docker.*` operation funnels through a single gate that
   refuses to run while `[docker].enabled = false` (it used to be read and
   never enforced). Images from the caller pass the allow/deny lists before
