@@ -11,7 +11,7 @@
 		{
 			"type": "string",
 			"name": "action",
-			"description": "one of: start, stop, restart, remove",
+			"description": "one of: start, stop, restart, remove, recreate",
 			"disallow": []
 		}
 	]
@@ -46,4 +46,11 @@ throw("remove failed: {1}".format([res.stderr]))
 close
 return("removed {1}".format([args.container]))
 close
-throw("docker_manage: action must be one of start, stop, restart, remove")
+if args.action == "recreate" then
+res = docker.recreate(args.container)
+if res.exitCode != 0 then
+throw("recreate failed: {1}".format([res.stderr]))
+close
+return("recreated {1}".format([args.container]))
+close
+throw("docker_manage: action must be one of start, stop, restart, remove, recreate")

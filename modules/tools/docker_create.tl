@@ -1,6 +1,6 @@
 {
 	"name": "docker_create",
-	"description": "Create and start a Docker container from an image. Port publishing is limited to the allowed port ranges in config (0 = publish nothing). Needs [docker].enabled = true",
+	"description": "Create and start a Docker container from an image. The host port must be inside [docker].allowed_ports (the exact ranges are listed in your 'Your environment' block; 0 = publish nothing). Needs [docker].enabled = true",
 	"arguments": [
 		{
 			"type": "string",

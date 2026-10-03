@@ -1,11 +1,11 @@
 // uses @anthropic-ai/sdk
 
-import { Anthropic } from "@anthropic-ai/sdk";
-import { ChatCompletion } from "openai/resources.mjs";
-import DB from "../db/struct.js";
-import Agent, { AskOptions, Brain, Provider, Model, ModelType, Tool } from "./struct.js";
-import { Logger } from "../utils/logger.js";
-import { ExternalError } from "../utils/errors.js";
+import { Anthropic } from '@anthropic-ai/sdk';
+import { ChatCompletion } from 'openai/resources.mjs';
+import DB from '../db/struct.js';
+import Agent, { AskOptions, Brain, Provider, Model, ModelType, Tool } from './struct.js';
+import { Logger } from '../utils/logger.js';
+import { ExternalError } from '../utils/errors.js';
 
 /** Anthropic-flavoured agent exposing the same interface as the OpenAI one. */
 export default class extends Brain implements Agent {
@@ -19,11 +19,11 @@ export default class extends Brain implements Agent {
 		public sys_prompt: string,
 		tools: Tool[] = [],
 		private maxToolRoundtrips = 4,
-		log?: Logger,
+		log?: Logger
 	) {
 		super(db, tools);
 		this.prov = new Anthropic({ apiKey: api.apiKey, baseURL: api.baseUrl || undefined });
-		this.log = (log ?? new Logger()).child("agent.anthropic");
+		this.log = (log ?? new Logger()).child('agent.anthropic');
 	}
 
 	/**
@@ -31,39 +31,53 @@ export default class extends Brain implements Agent {
 	 * of the project expects, so callers stay provider-agnostic.
 	 */
 	public async ask(prompt: string, system?: string, opts?: AskOptions): Promise<ChatCompletion> {
-		this.setStatus({ busy: true, doing: "thinking" });
+		this.setStatus({ busy: true, doing: 'thinking' });
 		try {
 			const ephemeral = opts?.ephemeral === true;
 			if (!ephemeral) await this.ensureMemory();
 			const model = this.getModel(this.routeModel(prompt, opts?.model));
-			this.setStatus({ busy: true, doing: "thinking", mode: model.type === "coding" ? "coding" : "talking" });
-			const suffix = ephemeral ? "" : await this.contextSuffix(opts?.speakerId);
+			this.setStatus({ busy: true, doing: 'thinking', mode: model.type === 'coding' ? 'coding' : 'talking' });
+			const suffix = ephemeral ? '' : await this.contextSuffix(opts?.speakerId);
 			// identity + brain + tool inventory, then the situational context
-			const systemPrompt = this.sys_prompt + suffix + this.toolsBlock() + (system ?? "");
-			const messages: Anthropic.MessageParam[] = ephemeral
-				? [{ role: "user", content: prompt }]
-				: this.mergeTurns([...this.historyMessages(), { role: "user", content: prompt }]);
+			const systemPrompt = this.sys_prompt + suffix + this.toolsBlock() + (system ?? '');
+			const messages: Anthropic.MessageParam[] = ephemeral ? [{ role: 'user', content: prompt }] : this.mergeTurns([...this.historyMessages(), { role: 'user', content: prompt }]);
 			// only tools that are still enabled: dashboard toggles apply immediately
 			const callable = this.callableTools();
 			let toolsDef =
 				callable.length > 0
 					? callable.map((t) => ({
-						name: t.name,
-						description: t.description,
-						input_schema: (t.parameters ?? { type: "object", properties: {} }) as { type: "object"; properties: Record<string, unknown> },
-					}))
+							name: t.name,
+							description: t.description,
+							input_schema: (t.parameters ?? { type: 'object', properties: {} }) as { type: 'object'; properties: Record<string, unknown> }
+						}))
 					: undefined;
 
-			const send = () => this.prov.messages.create({ model: model.name, max_tokens: 2048, system: systemPrompt, messages, tools: toolsDef });
+			// 4096: a tool-heavy turn (args + result + answer) used to hit the old
+			// 2048 ceiling and get truncated mid-call
+			const send = () =>
+				this.prov.messages.create({
+					model: model.name,
+					max_tokens: 4096,
+					system: systemPrompt,
+					messages,
+					tools: toolsDef,
+					tool_choice: toolsDef ? { type: 'auto' } : undefined
+				});
 			let response = await send();
 
 			// Tool loop: without it the model could ask for a tool and still answer
 			// the user with nothing at all (the OpenAI agent already had one).
 			for (let round = 0; round <= this.maxToolRoundtrips; round++) {
-				const toolUses = response.content.filter((b) => b.type === "tool_use") as Anthropic.ToolUseBlock[];
+				const toolUses = response.content.filter((b) => b.type === 'tool_use') as Anthropic.ToolUseBlock[];
 				if (toolUses.length === 0) break;
-				messages.push({ role: "assistant", content: response.content });
-				const results: { type: "tool_result"; tool_use_id: string; content: string }[] = [];
+				// progress hook (Discord "Executing ..." message), same rules as openai.ts
+				try {
+					opts?.onToolCall?.(toolUses.map((u) => u.name));
+				} catch {
+					/* a broken progress hook must not eat the answer */
+				}
+				messages.push({ role: 'assistant', content: response.content });
+				const results: { type: 'tool_result'; tool_use_id: string; content: string }[] = [];
 				for (const use of toolUses) {
 					let out: string;
 					try {
@@ -74,49 +88,49 @@ export default class extends Brain implements Agent {
 					} catch (err) {
 						out = this.toolResultText({ error: err instanceof Error ? err.message : String(err) });
 					}
-					results.push({ type: "tool_result", tool_use_id: use.id, content: out });
+					results.push({ type: 'tool_result', tool_use_id: use.id, content: out });
 				}
-				messages.push({ role: "user", content: results });
+				messages.push({ role: 'user', content: results });
 				// the final roundtrips drop the tools, so the model must answer in text
 				if (round >= this.maxToolRoundtrips) toolsDef = undefined;
 				response = await send();
 			}
 
 			const text = response.content
-				.filter((b): b is Anthropic.ContentBlock & { text: string } => "text" in b)
+				.filter((b): b is Anthropic.ContentBlock & { text: string } => 'text' in b)
 				.map((b) => b.text)
-				.join("\n");
+				.join('\n');
 
 			// keep the rolling memory in sync (pairs stay alternating for the API)
 			if (!ephemeral) {
-				this.rememberTurn("user", prompt);
-				this.rememberTurn("assistant", text);
+				this.rememberTurn('user', prompt);
+				this.rememberTurn('assistant', text);
 			}
 
 			// shape-shift into a ChatCompletion-ish object so downstream code works
 			return {
 				id: response.id,
-				object: "chat.completion",
+				object: 'chat.completion',
 				created: Math.floor(Date.now() / 1000),
 				model: response.model,
 				choices: [
 					{
 						index: 0,
-						message: { role: "assistant", content: text },
-						finish_reason: response.stop_reason === "max_tokens" ? "length" : "stop",
-					},
+						message: { role: 'assistant', content: text },
+						finish_reason: response.stop_reason === 'max_tokens' ? 'length' : 'stop'
+					}
 				],
 				usage: {
 					prompt_tokens: response.usage.input_tokens,
 					completion_tokens: response.usage.output_tokens,
-					total_tokens: response.usage.input_tokens + response.usage.output_tokens,
-				},
+					total_tokens: response.usage.input_tokens + response.usage.output_tokens
+				}
 			} as unknown as ChatCompletion;
 		} catch (err) {
-			this.log.error("ask failed:", err instanceof Error ? err.message : err);
-			throw new ExternalError("anthropic", err);
+			this.log.error('ask failed:', err instanceof Error ? err.message : err);
+			throw new ExternalError('anthropic', err);
 		} finally {
-			this.setStatus({ busy: false, doing: "nothing much, just looking at messages", mode: "idle" });
+			this.setStatus({ busy: false, doing: 'nothing much, just looking at messages', mode: 'idle' });
 		}
 	}
 
@@ -128,15 +142,15 @@ export default class extends Brain implements Agent {
 	 * Anthropic wants strict user/assistant alternation, so consecutive turns
 	 * of the same role (possible after a partial history) get merged.
 	 */
-	private mergeTurns(turns: { role: "user" | "assistant"; content: string }[]): Anthropic.MessageParam[] {
-		const merged: { role: "user" | "assistant"; content: string }[] = [];
+	private mergeTurns(turns: { role: 'user' | 'assistant'; content: string }[]): Anthropic.MessageParam[] {
+		const merged: { role: 'user' | 'assistant'; content: string }[] = [];
 		for (const t of turns) {
 			if (!t.content.trim()) continue;
 			const last = merged[merged.length - 1];
-			if (last && last.role === t.role) last.content += "\n" + t.content;
+			if (last && last.role === t.role) last.content += '\n' + t.content;
 			else merged.push({ role: t.role, content: t.content });
 		}
-		while (merged.length > 0 && merged[0].role === "assistant") merged.shift();
+		while (merged.length > 0 && merged[0].role === 'assistant') merged.shift();
 		return merged;
 	}
 

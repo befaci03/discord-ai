@@ -2,9 +2,9 @@
 // config.toml is the user-facing file; every key has a sane default so a
 // minimal config still boots. Secrets can come from env vars via ${VAR} syntax.
 
-import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
-import * as path from "node:path";
-import toml from "toml";
+import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import * as path from 'node:path';
+import toml from 'toml';
 
 export interface HttpConfig {
 	host: string;
@@ -24,6 +24,10 @@ export interface DockerConfig {
 	disallowedImages: string[];
 	allowedImages?: string[];
 	defaultImage: string;
+	/** host paths the llm may bind-mount (resolved at load; empty = none) */
+	allowedVolumePaths: string[];
+	/** interface published ports bind to; default loopback = this box only */
+	bindAddress: string;
 }
 
 export interface ToolangConfig {
@@ -155,8 +159,20 @@ export interface BotConfig {
 	guild_id?: string;
 	status: string;
 }
+
+/** Housekeeping knobs that do not belong to any one section. */
+export interface GeneralConfig {
+	/**
+	 * Message the bot posts in the channel while the agent works through tool
+	 * calls. `[TOOL_NAME]` is replaced with the tool(s) being called, the same
+	 * message is edited on every following call and deleted before the final
+	 * reply. Empty string = never post it.
+	 */
+	execution_message: string;
+}
 export interface AppConfig {
 	bot: BotConfig;
+	general: GeneralConfig;
 	http: HttpConfig;
 	docker: DockerConfig;
 	database: DatabaseConfig;
@@ -164,37 +180,45 @@ export interface AppConfig {
 	addons: { enabled: string[] } & Record<string, unknown>;
 	tools: { directories: string[]; disabled: string[] };
 	skills: { directories: string[]; disabled: string[]; allowEnvAccess: boolean };
-	logging: { level: "debug" | "info" | "warn" | "error"; file?: string };
+	logging: { level: 'debug' | 'info' | 'warn' | 'error'; file?: string };
 }
 
 const DEFAULT_CONFIG: AppConfig = {
-	bot: { token: "", client_id: "", status: "watching the server burn" },
-	http: { host: "127.0.0.1", port: 3000, allowedIps: ["127.0.0.1"], passcode_env: "DASHBOARD_PASSCODE" },
+	bot: { token: '', client_id: '', status: 'watching the server burn' },
+	general: { execution_message: ':thinking: *Executing `[TOOL_NAME]`...*' },
+	http: { host: '127.0.0.1', port: 3000, allowedIps: ['127.0.0.1'], passcode_env: 'DASHBOARD_PASSCODE' },
 	database: {
-		use: "sqlite",
-		sqlite: { path: "modules/data.sqlite" },
-		postgres: { host: "127.0.0.1", port: 5432, username: "", password: "", database: "discord_ai" },
-		mariadb: { host: "127.0.0.1", port: 3306, username: "", password: "", database: "discord_ai" },
-		mongodb: { uri: "mongodb://127.0.0.1:27017", database: "discord_ai" },
-		cassandra: { contact_points: ["127.0.0.1"], local_datacenter: "datacenter1", keyspace: "discord_ai" },
+		use: 'sqlite',
+		sqlite: { path: 'modules/data.sqlite' },
+		postgres: { host: '127.0.0.1', port: 5432, username: '', password: '', database: 'discord_ai' },
+		mariadb: { host: '127.0.0.1', port: 3306, username: '', password: '', database: 'discord_ai' },
+		mongodb: { uri: 'mongodb://127.0.0.1:27017', database: 'discord_ai' },
+		cassandra: { contact_points: ['127.0.0.1'], local_datacenter: 'datacenter1', keyspace: 'discord_ai' }
 	},
 	docker: {
 		enabled: false,
-		host: "unix:///var/run/docker.sock",
-		allowedPorts: ["3456-35665"],
+		host: 'unix:///var/run/docker.sock',
+		allowedPorts: ['3456-35665'],
 		maxContainers: 100,
-		disallowedImages: ["ftp", "ssh", "windows"],
-		defaultImage: "debian:bookworm",
+		disallowedImages: ['ftp', 'ssh', 'windows'],
+		defaultImage: 'debian:bookworm',
+		allowedVolumePaths: [],
+		bindAddress: '127.0.0.1'
 	},
 	agent: {
-		name: "Agent",
-		prompt: "You are a helpful Discord agent.",
+		name: 'Agent',
+		prompt: 'You are a helpful Discord agent.',
 		brain: { memory: 30, likes: [], dislikes: [], favorites: [], pending: [], people: {}, reset: false },
 		providers: {},
 		models: {
 			use_same_models: true,
-			default_model: { provider: "openai", model: "gpt-4o-mini" },
-			coding_model: [], image_model: [], video_model: [], tts_model: [], stt_model: [], rerank_model: [],
+			default_model: { provider: 'openai', model: 'gpt-4o-mini' },
+			coding_model: [],
+			image_model: [],
+			video_model: [],
+			tts_model: [],
+			stt_model: [],
+			rerank_model: []
 		},
 		toolang: {
 			maxLoopIterations: 10_000,
@@ -205,14 +229,14 @@ const DEFAULT_CONFIG: AppConfig = {
 			allowToolCreation: false,
 			allowSkillCreation: false,
 			http: { blockPrivate: true, maxResponseBytes: 2_000_000, timeoutMs: 15_000 },
-			fs: { root: "./sandbox", maxFileSize: 1_000_000, allowWrite: false },
-			node: { enabled: false, timeoutMs: 30_000 },
-		},
+			fs: { root: './sandbox', maxFileSize: 1_000_000, allowWrite: false },
+			node: { enabled: false, timeoutMs: 30_000 }
+		}
 	},
 	addons: { enabled: [] },
-	tools: { directories: ["modules/tools"], disabled: [] },
-	skills: { directories: ["modules/skills"], disabled: [], allowEnvAccess: false },
-	logging: { level: "info" },
+	tools: { directories: ['modules/tools'], disabled: [] },
+	skills: { directories: ['modules/skills'], disabled: [], allowEnvAccess: false },
+	logging: { level: 'info' }
 };
 
 /**
@@ -223,7 +247,7 @@ const DEFAULT_CONFIG: AppConfig = {
  * Keys that already exist (e.g. `passcode_env`, `guild_id`) keep their name.
  */
 function normalizeKey(key: string, defaults: Record<string, unknown>): string {
-	if (key in defaults || !key.includes("_")) return key;
+	if (key in defaults || !key.includes('_')) return key;
 	const camel = key.replace(/_([a-z0-9])/g, (_m, c: string) => c.toUpperCase());
 	return camel in defaults ? camel : key;
 }
@@ -235,7 +259,7 @@ function deepFill(target: Record<string, unknown>, defaults: Record<string, unkn
 		if (value === undefined) continue;
 		const key = normalizeKey(rawKey, out);
 		const def = out[key];
-		if (def && typeof def === "object" && !Array.isArray(def) && typeof value === "object" && !Array.isArray(value)) {
+		if (def && typeof def === 'object' && !Array.isArray(def) && typeof value === 'object' && !Array.isArray(value)) {
 			out[key] = deepFill(value as Record<string, unknown>, def as Record<string, unknown>);
 		} else {
 			out[key] = value;
@@ -246,7 +270,7 @@ function deepFill(target: Record<string, unknown>, defaults: Record<string, unkn
 
 /** Expand ${ENV_VAR} references from the environment. */
 function expandEnv(value: unknown): unknown {
-	if (typeof value === "string") {
+	if (typeof value === 'string') {
 		return value.replace(/\$\{([A-Z0-9_]+)\}/g, (match, name: string) => {
 			const env = process.env[name];
 			if (env === undefined) return match; // leave as-is so missing vars are visible
@@ -254,7 +278,7 @@ function expandEnv(value: unknown): unknown {
 		});
 	}
 	if (Array.isArray(value)) return value.map(expandEnv);
-	if (value && typeof value === "object") {
+	if (value && typeof value === 'object') {
 		const out: Record<string, unknown> = {};
 		for (const [k, v] of Object.entries(value)) out[k] = expandEnv(v);
 		return out;
@@ -264,12 +288,16 @@ function expandEnv(value: unknown): unknown {
 
 /** Bounded list of trimmed strings; accepts a comma-separated string too. */
 function normStringList(value: unknown, cap: number): string[] {
-	const list = typeof value === "string" ? value.split(",") : Array.isArray(value) ? value : [];
-	return list.map(String).map((s) => s.trim().slice(0, 120)).filter(Boolean).slice(0, cap);
+	const list = typeof value === 'string' ? value.split(',') : Array.isArray(value) ? value : [];
+	return list
+		.map(String)
+		.map((s) => s.trim().slice(0, 120))
+		.filter(Boolean)
+		.slice(0, cap);
 }
 
 function requireNonEmpty(value: unknown, path: string): string {
-	if (typeof value !== "string" || value.length === 0) throw new Error(`config: '${path}' must be a non-empty string`);
+	if (typeof value !== 'string' || value.length === 0) throw new Error(`config: '${path}' must be a non-empty string`);
 	return value;
 }
 
@@ -282,23 +310,26 @@ function validateConfig(cfg: AppConfig): void {
 	const b = cfg.agent.brain;
 	const mem = Number(b.memory);
 	b.memory = Number.isFinite(mem) ? Math.min(Math.max(Math.floor(mem), 0), 200) : 30;
-	for (const key of ["likes", "dislikes", "favorites", "pending"] as const) {
+	for (const key of ['likes', 'dislikes', 'favorites', 'pending'] as const) {
 		b[key] = normStringList(b[key], 50);
 	}
 	b.reset = b.reset === true;
-	if (typeof b.people !== "object" || b.people === null || Array.isArray(b.people)) b.people = {};
+	if (typeof b.people !== 'object' || b.people === null || Array.isArray(b.people)) b.people = {};
 	b.people = Object.fromEntries(
 		Object.entries(b.people)
 			.slice(0, 50)
 			.map(([id, p]) => {
 				const person = (p ?? {}) as BrainPersonConfig;
-				return [id, {
-					description: String(person.description ?? "").slice(0, 500),
-					likes: normStringList(person.likes, 25),
-					dislikes: normStringList(person.dislikes, 25),
-					personalities: normStringList(person.personalities, 25),
-				} satisfies BrainPersonConfig];
-			}),
+				return [
+					id,
+					{
+						description: String(person.description ?? '').slice(0, 500),
+						likes: normStringList(person.likes, 25),
+						dislikes: normStringList(person.dislikes, 25),
+						personalities: normStringList(person.personalities, 25)
+					} satisfies BrainPersonConfig
+				];
+			})
 	);
 
 	// toolang limits get clamped, never trusted raw
@@ -308,12 +339,42 @@ function validateConfig(cfg: AppConfig): void {
 	t.maxSteps = Math.min(Math.max(Math.floor(Number(t.maxSteps) || 200_000), 100), 10_000_000);
 	t.maxOutputLength = Math.min(Math.max(Math.floor(Number(t.maxOutputLength) || 100_000), 100), 5_000_000);
 	t.toolTimeoutMs = Math.min(Math.max(Math.floor(Number(t.toolTimeoutMs) || 30_000), 1000), 600_000);
+	// creation switches gate real capabilities (manage_tool / manage_skill),
+	// so only a real boolean true turns them on
+	t.allowToolCreation = t.allowToolCreation === true;
+	t.allowSkillCreation = t.allowSkillCreation === true;
 	t.fs.root = path.resolve(t.fs.root);
 	t.fs.maxFileSize = Math.min(Math.max(Math.floor(Number(t.fs.maxFileSize) || 1_000_000), 100), 50_000_000);
 
 	// docker ports must look like ranges
 	if (!Array.isArray(cfg.docker.allowedPorts)) cfg.docker.allowedPorts = [];
 	cfg.docker.allowedPorts = cfg.docker.allowedPorts.map(String).filter((r) => /^\d+-\d+$|^\d+$/.test(r));
+	// host mounts are opt-in: resolved so a /data/../etc trick cannot slip past
+	// the prefix check later, capped so the list stays readable
+	if (!Array.isArray(cfg.docker.allowedVolumePaths)) cfg.docker.allowedVolumePaths = [];
+	cfg.docker.allowedVolumePaths = cfg.docker.allowedVolumePaths
+		.map(String)
+		.map((p) => p.trim())
+		.filter(Boolean)
+		.slice(0, 20)
+		.map((p) => path.resolve(p));
+	// published ports bind to loopback unless the operator opens them up
+	// (the exact value is enforced again where the -p flag is built)
+	cfg.docker.bindAddress = typeof cfg.docker.bindAddress === 'string' && cfg.docker.bindAddress.trim() ? cfg.docker.bindAddress.trim().slice(0, 45) : '127.0.0.1';
+
+	// [general].execution_message: one line, capped, control chars stripped
+	// (it is rendered straight into a Discord message)
+	const g = cfg.general;
+	if (!g || typeof g.execution_message !== 'string') {
+		cfg.general = { execution_message: DEFAULT_CONFIG.general.execution_message };
+	} else {
+		cfg.general = {
+			execution_message: g.execution_message
+				.replace(/[\x00-\x1f\x7f]/g, ' ')
+				.trim()
+				.slice(0, 500)
+		};
+	}
 
 	// bot credentials come from env in production; config values must be literal
 	if (process.env.DISCORD_TOKEN) cfg.bot.token = process.env.DISCORD_TOKEN;
@@ -332,23 +393,23 @@ function validateConfig(cfg: AppConfig): void {
 	cfg.addons.enabled = cfg.addons.enabled.map(String).map((s) => s.toLowerCase());
 	// never let addon settings hold expanded secrets in logs: keys are lowercase slugs
 	for (const key of Object.keys(cfg.addons)) {
-		if (key === "enabled") continue;
+		if (key === 'enabled') continue;
 		if (!/^[a-z][a-z0-9_]*$/.test(key)) delete cfg.addons[key];
 	}
 
 	// database: pick the driver + sanity-check its settings
-	if (!cfg.database || typeof cfg.database.use !== "string") cfg.database.use = "sqlite";
+	if (!cfg.database || typeof cfg.database.use !== 'string') cfg.database.use = 'sqlite';
 	cfg.database.use = cfg.database.use.toLowerCase();
-	if (cfg.database.use !== "sqlite" && cfg.database.use !== "postgres" && cfg.database.use !== "mariadb" && cfg.database.use !== "mongodb" && cfg.database.use !== "cassandra") {
+	if (cfg.database.use !== 'sqlite' && cfg.database.use !== 'postgres' && cfg.database.use !== 'mariadb' && cfg.database.use !== 'mongodb' && cfg.database.use !== 'cassandra') {
 		console.warn(`[database] unknown driver '${cfg.database.use}', defaulting to sqlite`);
-		cfg.database.use = "sqlite";
+		cfg.database.use = 'sqlite';
 	}
 	if (cfg.database.postgres?.port) cfg.database.postgres.port = Math.min(Math.max(Math.floor(Number(cfg.database.postgres.port) || 5432), 1), 65535);
 	if (cfg.database.mariadb?.port) cfg.database.mariadb.port = Math.min(Math.max(Math.floor(Number(cfg.database.mariadb.port) || 3306), 1), 65535);
 
 	// providers: env expansion for api keys
 	for (const provider of Object.values(cfg.agent.providers)) {
-		if (provider && typeof provider === "object" && typeof provider.api_key === "string") {
+		if (provider && typeof provider === 'object' && typeof provider.api_key === 'string') {
 			provider.api_key = provider.api_key.replace(/\$\{([A-Z0-9_]+)\}/g, (m, name: string) => process.env[name] ?? m);
 		}
 	}
@@ -358,22 +419,22 @@ let cached: AppConfig | null = null;
 
 export function loadConfig(configPath?: string): AppConfig {
 	if (cached) return cached;
-	const resolved = path.resolve(configPath ?? path.join(process.cwd(), "config.toml"));
+	const resolved = path.resolve(configPath ?? path.join(process.cwd(), 'config.toml'));
 	if (!existsSync(resolved)) {
 		// no config: write the example so the user has a starting point
-		const example = path.resolve(path.join(process.cwd(), "example.config.toml"));
+		const example = path.resolve(path.join(process.cwd(), 'example.config.toml'));
 		if (existsSync(example)) {
 			mkdirSync(path.dirname(resolved), { recursive: true });
-			writeFileSync(resolved, readFileSync(example, "utf-8"));
+			writeFileSync(resolved, readFileSync(example, 'utf-8'));
 			console.warn(`[config] no config found, created '${resolved}' from example.config.toml. Edit it and restart.`);
 		} else {
-			console.warn("[config] no config file found, running with defaults (bot will not be able to connect)");
+			console.warn('[config] no config file found, running with defaults (bot will not be able to connect)');
 		}
 	}
 	let parsed: Record<string, unknown> = {};
 	if (existsSync(resolved)) {
 		try {
-			parsed = toml.parse(readFileSync(resolved, "utf-8")) as unknown as Record<string, unknown>;
+			parsed = toml.parse(readFileSync(resolved, 'utf-8')) as unknown as Record<string, unknown>;
 		} catch (err) {
 			throw new Error(`config: failed to parse '${resolved}': ${(err as Error).message}`);
 		}

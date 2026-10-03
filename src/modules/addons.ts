@@ -2,15 +2,16 @@
 // An addon extends the AGENT with LLM-callable functions (and optionally
 // exposes TooLang modules to tool scripts). Everything runs sandboxed.
 
-import { AppConfig } from "../utils/config.js";
-import { Addon, AddonStatus, AgentFunction, ModuleError } from "./types.js";
+import { AppConfig } from '../utils/config.js';
+import { Addon, AddonStatus, AgentFunction, ModuleError } from './types.js';
 // addons live in /modules/addons (project root), NOT in src
-import { GitHub } from "../../modules/addons/github.js";
-import { Weather } from "../../modules/addons/weather.js";
-import { Tunnel } from "../../modules/addons/tunnel.js";
-import { SMTP } from "../../modules/addons/smtp.js";
+import { GitHub } from '../../modules/addons/github.js';
+import { Weather } from '../../modules/addons/weather.js';
+import { Tunnel } from '../../modules/addons/tunnel.js';
+import { SMTP } from '../../modules/addons/smtp.js';
+import { Cron } from '../../modules/addons/cron.js';
 
-const BUILTINS: Addon[] = [GitHub, Weather, Tunnel, SMTP];
+const BUILTINS: Addon[] = [GitHub, Weather, Tunnel, SMTP, Cron];
 
 export class AddonRegistry {
 	private active = new Map<string, Addon>();
@@ -58,25 +59,25 @@ export class AddonRegistry {
 		const unknown: string[] = [];
 		const notes: string[] = [];
 		const enabled = new Set(this.config.addons.enabled);
-		const ignored = Object.keys(this.config.addons).filter((key) => key !== "enabled" && !enabled.has(key));
+		const ignored = Object.keys(this.config.addons).filter((key) => key !== 'enabled' && !enabled.has(key));
 		for (const name of this.config.addons.enabled) {
 			const addon = BUILTINS.find((a) => a.name === name);
 			if (!addon) {
 				unknown.push(name);
-				this.errors.set(name, "unknown addon");
+				this.errors.set(name, 'unknown addon');
 				continue;
 			}
 			try {
 				let ok = true;
 				if (addon.init) ok = await addon.init(this.config);
 				if (!ok) {
-					this.errors.set(name, "not configured (missing keys/env)");
+					this.errors.set(name, 'not configured (missing keys/env)');
 					continue;
 				}
 				this.active.set(addon.name, addon);
 				loaded.push(addon.name);
 				// optional one-liners for the startup log (e.g. the tunnel URL)
-				if (typeof addon.startupNote === "function") {
+				if (typeof addon.startupNote === 'function') {
 					const note = addon.startupNote();
 					if (note) notes.push(note);
 				}
@@ -126,16 +127,16 @@ export class AddonRegistry {
 					description: addon.description,
 					functions: addon.functions.map((f) => f.name),
 					configured: true,
-					enabled: this.isEnabled(name),
+					enabled: this.isEnabled(name)
 				});
 				continue;
 			} else {
 				statuses.push({
 					name,
-					description: "",
+					description: '',
 					functions: [],
 					configured: false,
-					error: this.errors.get(name) ?? "inactive",
+					error: this.errors.get(name) ?? 'inactive'
 				});
 			}
 		}

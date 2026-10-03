@@ -1,12 +1,12 @@
 // Tool registry: discovers .tl tools, validates their headers and args,
 // and executes them with the interpreter sandbox + a hard timeout.
 
-import { readdirSync, existsSync, statSync, readFileSync } from "node:fs";
-import * as path from "node:path";
-import { parseToolSource, executeToolSource, validateToolArgs, ParseError } from "../utils/toolang/index.js";
-import { resolveLimits } from "../utils/toolang/limits.js";
-import { ToolContext, LoadedTool, ModuleError } from "./types.js";
-import { AppConfig } from "../utils/config.js";
+import { readdirSync, existsSync, statSync, readFileSync } from 'node:fs';
+import * as path from 'node:path';
+import { parseToolSource, executeToolSource, validateToolArgs, ParseError } from '../utils/toolang/index.js';
+import { resolveLimits } from '../utils/toolang/limits.js';
+import { ToolContext, LoadedTool, ModuleError } from './types.js';
+import { AppConfig } from '../utils/config.js';
 
 export class ToolRegistry {
 	private tools = new Map<string, LoadedTool>();
@@ -29,11 +29,14 @@ export class ToolRegistry {
 	loadAll(): { loaded: string[]; skipped: string[] } {
 		const loaded: string[] = [];
 		const skipped: string[] = [];
+		// rebuild from disk: a tool deleted on disk (e.g. via manage_tool)
+		// must disappear from the registry, not stay callable from cache
+		this.tools.clear();
 		for (const dir of this.config.tools.directories) {
 			const abs = path.resolve(dir);
 			if (!existsSync(abs) || !statSync(abs).isDirectory()) continue;
 			for (const entry of readdirSync(abs)) {
-				if (!entry.endsWith(".tl")) continue;
+				if (!entry.endsWith('.tl')) continue;
 				const name = entry.slice(0, -3);
 				if (this.config.tools.disabled.includes(name)) {
 					skipped.push(name);
@@ -54,7 +57,7 @@ export class ToolRegistry {
 	}
 
 	private loadOne(filePath: string): LoadedTool {
-		const source = readFileSync(filePath, "utf-8");
+		const source = readFileSync(filePath, 'utf-8');
 		const { header } = parseToolSource(source);
 		if (!header.name || !/^[a-z][a-z0-9_]{1,63}$/.test(header.name)) {
 			throw new ModuleError(`invalid tool name '${header.name}' (lowercase letters, digits, underscores, max 64 chars)`);
@@ -62,18 +65,18 @@ export class ToolRegistry {
 		const config = this.config;
 		return {
 			name: header.name,
-			description: header.description ?? "",
+			description: header.description ?? '',
 			path: filePath,
 			header,
 			invoke: async (args: Record<string, unknown>, ctx: ToolContext): Promise<unknown> => {
 				const errors = validateToolArgs(header, args);
-				if (errors.length > 0) throw new ModuleError(`invalid arguments for tool '${header.name}': ${errors.join("; ")}`);
+				if (errors.length > 0) throw new ModuleError(`invalid arguments for tool '${header.name}': ${errors.join('; ')}`);
 
 				const limits = resolveLimits({
 					maxLoopIterations: config.agent.toolang.maxLoopIterations,
 					maxCallDepth: config.agent.toolang.maxCallDepth,
 					maxSteps: config.agent.toolang.maxSteps,
-					maxOutputLength: config.agent.toolang.maxOutputLength,
+					maxOutputLength: config.agent.toolang.maxOutputLength
 				});
 
 				const result = await executeToolSource(source, args, {
@@ -81,26 +84,28 @@ export class ToolRegistry {
 						http: config.agent.toolang.http,
 						fs: config.agent.toolang.fs,
 						node: config.agent.toolang.node,
-					docker: {
-						enabled: config.docker.enabled,
-						host: config.docker.host,
-						allowedPorts: config.docker.allowedPorts,
-						disallowedImages: config.docker.disallowedImages,
-						allowedImages: config.docker.allowedImages,
-						maxContainers: config.docker.maxContainers,
-						defaultImage: config.docker.defaultImage,
-					},
+						docker: {
+							enabled: config.docker.enabled,
+							host: config.docker.host,
+							allowedPorts: config.docker.allowedPorts,
+							disallowedImages: config.docker.disallowedImages,
+							allowedImages: config.docker.allowedImages,
+							maxContainers: config.docker.maxContainers,
+							defaultImage: config.docker.defaultImage,
+							allowedVolumePaths: config.docker.allowedVolumePaths,
+							bindAddress: config.docker.bindAddress
+						}
 					},
 					discord: ctx.discord as never,
 					agent: ctx.agent as never,
 					extraVars: this.extraVars,
 					envAccess: this.envAccess,
-					limits,
+					limits
 				});
 
 				if (!result.success) throw new ModuleError(`tool '${header.name}' failed: ${result.error}`);
 				return result.data;
-			},
+			}
 		};
 	}
 
@@ -162,10 +167,7 @@ export async function runTool(registry: ToolRegistry, name: string, args: Record
 	const tool = registry.get(name);
 	if (!tool) throw new ModuleError(`unknown tool '${name}'`);
 	const timeoutMs = ctx.config.agent.toolang.toolTimeoutMs;
-	return await Promise.race([
-		tool.invoke(args, ctx),
-		new Promise((_resolve, reject) => setTimeout(() => reject(new ModuleError(`tool '${name}' timed out after ${timeoutMs}ms`)), timeoutMs)),
-	]);
+	return await Promise.race([tool.invoke(args, ctx), new Promise((_resolve, reject) => setTimeout(() => reject(new ModuleError(`tool '${name}' timed out after ${timeoutMs}ms`)), timeoutMs))]);
 }
 
 export { ParseError };

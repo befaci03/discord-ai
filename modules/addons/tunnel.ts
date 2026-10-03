@@ -6,299 +6,271 @@
 /// - "quick" (default): cloudflared creates an ephemeral
 ///   https://<random>.trycloudflare.com route. No Cloudflare account, no
 ///   token. The URL changes on every restart (Cloudflare says so out loud).
-/// - "named": runs a Cloudflare-managed tunnel (your own hostname, configured
-///   in the Zero Trust dashboard). The token comes from CF_TUNNEL_TOKEN or
-///   addons.tunnel.token and is handed to cloudflared via the child's
-///   ENVIRONMENT only: never argv (ps would show it), never logs, never a
-///   response.
+/// - "named": runs a Cloudflare-managed tunnel (your own hostname). Two ways
+///   to run it: with a token (CF_TUNNEL_TOKEN / addons.tunnel.token, ingress
+///   rules come from the Cloudflare dashboard) or with addons.tunnel.tunnel_id
+///   (locally managed: THIS addon generates the ingress config, which is what
+///   lets the agent manage hostname routes). The token is handed to
+///   cloudflared through the child's ENVIRONMENT only: never argv, never
+///   logs, never a response.
 ///
-/// The agent gets exactly one read-only function: tunnel_status. No mutating
-/// functions on purpose, an LLM should not be able to republish your infra.
-/// The child is spawned without a shell and killed when the process exits.
+/// Agent surface: tunnel_status + tunnel_list_routes are read-only, always
+/// there. tunnel_create_route / tunnel_edit_route / tunnel_remove_route only
+/// exist when addons.tunnel.allow_route_creation = true, only touch routes the
+/// agent created, and can only publish hostnames inside allowed_domains. The
+/// operator's own hostname is write-protected: it is always the first ingress
+/// rule and never part of the route table.
+///
+/// The children are spawned without a shell and killed when the process exits.
 
-import { spawn, ChildProcess } from "node:child_process";
-import { AppConfig } from "../../src/utils/config.js";
-import { Addon, AgentFunction } from "../../src/modules/types.js";
+import { existsSync } from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { AppConfig } from '../../src/utils/config.js';
+import { Addon, AgentFunction } from '../../src/modules/types.js';
+import { TunnelConfig, TunnelRuntime, TunnelStatus, RouteBase, fn, rawSection, checkCredentialsPath, checkTunnelId } from './tunnel_runtime.js';
+import { RouteManager, RouteResult, MAX_ROUTES } from './tunnel_routes.js';
 
-const STARTUP_TIMEOUT_MS = 20_000;
-const POLL_MS = 100;
-const MAX_LOG_LINES = 40;
-const MAX_LINE_CHARS = 400;
-/** only ever accept an ephemeral route hostname printed by cloudflared itself */
-const QUICK_URL_RE = /https:\/\/[a-z0-9-]{1,63}\.trycloudflare\.com/i;
-const SERVICE_RE = /^https?:\/\/(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9._-]{1,253})(:\d{1,5})?(\/[^\s]{0,500})?$/;
-const HOSTNAME_RE = /^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$/i;
+const SERVICE_HINT = /^https?:\/\/(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9._-]{1,253})(:\d{1,5})?(\/[^\s]{0,500})?$/;
 const UNEXPANDED_ENV_RE = /^\$\{[A-Z0-9_]+\}$/;
-
-export type TunnelMode = "quick" | "named";
-
-export interface TunnelConfig {
-	mode: TunnelMode;
-	binary: string;
-	/** local target the tunnel forwards to, e.g. http://127.0.0.1:3000 */
-	service: string;
-	/** named mode: your public hostname (display only, set up in the CF dashboard) */
-	hostname?: string;
-	/** named mode only; never logged, never returned */
-	token?: string;
-}
+/** operator hostnames: plain hostname, optionally "*.example.com" */
+const DOMAIN_ENTRY_RE = /^(\*\.)?[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$/i;
 
 function resolveService(config: AppConfig, value: unknown): string {
-	if (typeof value === "string" && value.trim().length > 0) {
+	if (typeof value === 'string' && value.trim().length > 0) {
+		// operator config: URL shape only (the local-only rule is for the agent)
 		const s = value.trim();
-		if (s.length > 512 || !SERVICE_RE.test(s)) {
-			throw new Error("tunnel: addons.tunnel.service must look like http://host[:port][/path]");
+		if (s.length > 512 || !SERVICE_HINT.test(s)) {
+			throw new Error('tunnel: addons.tunnel.service must look like http://host[:port][/path]');
 		}
 		return s;
 	}
 	// cloudflared runs on this box, so wildcard binds are rewritten to loopback
 	let host = config.http.host;
-	if (host === "0.0.0.0" || host === "::" || host === "") host = "127.0.0.1";
+	if (host === '0.0.0.0' || host === '::' || host === '') host = '127.0.0.1';
 	return `http://${host}:${config.http.port}`;
 }
 
 function resolveToken(value: unknown): string | undefined {
 	const fromEnv = process.env.CF_TUNNEL_TOKEN;
-	let token = typeof fromEnv === "string" && fromEnv.trim().length > 0 ? fromEnv.trim() : undefined;
-	if (!token && typeof value === "string" && value.trim().length > 0) {
+	let token = typeof fromEnv === 'string' && fromEnv.trim().length > 0 ? fromEnv.trim() : undefined;
+	if (!token && typeof value === 'string' && value.trim().length > 0) {
 		const t = value.trim();
 		// an unexpanded ${VAR} reference means the env var was never set
 		if (!UNEXPANDED_ENV_RE.test(t)) token = t;
 	}
-	if (token && (token.length < 10 || token.length > 4096)) throw new Error("tunnel: token length looks wrong");
+	if (token && (token.length < 10 || token.length > 4096)) throw new Error('tunnel: token length looks wrong');
 	return token;
 }
 
+function strList(v: unknown): string[] {
+	if (!Array.isArray(v)) return [];
+	return v
+		.map(String)
+		.map((s) => s.trim().toLowerCase())
+		.filter(Boolean)
+		.slice(0, 20);
+}
+
 function getConfig(config: AppConfig): TunnelConfig {
-	const raw = (config.addons as unknown as Record<string, Record<string, unknown>>).tunnel ?? {};
-	const mode = raw.mode === undefined ? "quick" : String(raw.mode);
-	if (mode !== "quick" && mode !== "named") throw new Error("tunnel: mode must be 'quick' or 'named'");
-	const binary = typeof raw.binary === "string" && raw.binary.trim().length > 0 ? raw.binary.trim() : "cloudflared";
-	if (binary.length > 512 || binary.includes("\0")) throw new Error("tunnel: addons.tunnel.binary looks wrong");
+	const raw = rawSection(config);
+	const mode = raw.mode === undefined ? 'quick' : String(raw.mode);
+	if (mode !== 'quick' && mode !== 'named') throw new Error("tunnel: mode must be 'quick' or 'named'");
+	const binary = typeof raw.binary === 'string' && raw.binary.trim().length > 0 ? raw.binary.trim() : 'cloudflared';
+	if (binary.length > 512 || binary.includes('\0')) throw new Error('tunnel: addons.tunnel.binary looks wrong');
+
+	// the operator's hostname: shape-checked only, never gated by allowed_domains
 	let hostname: string | undefined;
-	if (typeof raw.hostname === "string" && raw.hostname.trim().length > 0) {
+	if (typeof raw.hostname === 'string' && raw.hostname.trim().length > 0) {
 		const h = raw.hostname.trim().toLowerCase();
-		if (h.length > 253 || !HOSTNAME_RE.test(h)) throw new Error("tunnel: addons.tunnel.hostname must be a plain hostname");
+		if (h.length > 253 || !DOMAIN_ENTRY_RE.test(h)) throw new Error('tunnel: addons.tunnel.hostname must be a plain hostname');
 		hostname = h;
 	}
+
+	// hostnames the AGENT may publish: entries must be real domains (or *.domain)
+	const allowedDomains = strList(raw.allowed_domains).map((entry) => {
+		if (!DOMAIN_ENTRY_RE.test(entry)) throw new Error(`tunnel: addons.tunnel.allowed_domains entry '${entry.slice(0, 60)}' is not a hostname`);
+		return entry;
+	});
+
+	const tunnelId = typeof raw.tunnel_id === 'string' && raw.tunnel_id.trim().length > 0 ? checkTunnelId(raw.tunnel_id) : undefined;
+	let credentialsFile = typeof raw.credentials_file === 'string' && raw.credentials_file.trim().length > 0 ? checkCredentialsPath(raw.credentials_file) : undefined;
+	if (tunnelId && !credentialsFile) {
+		// cloudflared's own default location; only added when it really exists
+		const guess = path.join(os.homedir(), '.cloudflared', `${tunnelId}.json`);
+		if (existsSync(guess)) credentialsFile = guess;
+	}
+
 	return {
-		mode: mode as TunnelMode,
+		mode: mode as TunnelConfig['mode'],
 		binary,
 		service: resolveService(config, raw.service),
 		hostname,
-		token: mode === "named" ? resolveToken(raw.token) : undefined,
+		token: mode === 'named' ? resolveToken(raw.token) : undefined,
+		allowed_domains: allowedDomains,
+		allow_route_creation: raw.allow_route_creation === true,
+		tunnel_id: tunnelId,
+		credentials_file: credentialsFile
 	};
-}
-
-export interface TunnelStatus {
-	mode: TunnelMode;
-	running: boolean;
-	connected: boolean;
-	/** quick: the ephemeral route; named: the configured hostname (when running) */
-	url: string;
-	/** local target the tunnel forwards to */
-	service: string;
-	uptime_sec: number;
-	error?: string;
-	recent: string[];
-}
-
-class TunnelRuntime {
-	private child: ChildProcess | null = null;
-	private url = "";
-	private connected = false;
-	private startedAt = 0;
-	private lastError = "";
-	private exited = false;
-	private exitHook: (() => void) | null = null;
-	private recent: string[] = [];
-
-	constructor(private cfg: TunnelConfig) {}
-
-	async start(): Promise<void> {
-		const args =
-			this.cfg.mode === "quick"
-				? ["tunnel", "--no-autoupdate", "--url", this.cfg.service]
-				: ["tunnel", "--no-autoupdate", "run"];
-		const env: NodeJS.ProcessEnv = { ...process.env };
-		// token goes through env, never argv: `ps aux` must not show it
-		if (this.cfg.mode === "named" && this.cfg.token) env.TUNNEL_TOKEN = this.cfg.token;
-
-		const child = spawn(this.cfg.binary, args, {
-			env,
-			stdio: ["ignore", "pipe", "pipe"],
-			windowsHide: true,
-			shell: false, // args are never handed to a shell
-		});
-		this.child = child;
-		this.startedAt = Date.now();
-
-		// the bot's SIGINT/SIGTERM handlers call process.exit(); an "exit"
-		// listener still runs then, so cloudflared dies with us either way
-		this.exitHook = () => {
-			try {
-				child.kill("SIGTERM");
-			} catch {
-				/* already gone */
-			}
-		};
-		process.once("exit", this.exitHook);
-
-		child.on("error", (err: Error) => {
-			this.lastError = err.message.includes("ENOENT")
-				? `cloudflared not found ('${this.cfg.binary}') - install it or set addons.tunnel.binary`
-				: `tunnel: ${err.message}`;
-			this.exited = true;
-		});
-		child.on("exit", (code: number | null, signal: string | null) => {
-			if (this.child === child) this.child = null;
-			this.exited = true;
-			this.url = "";
-			this.connected = false;
-			this.note(`cloudflared exited (code=${code ?? "?"} signal=${signal ?? "?"})`);
-		});
-		const onData = (chunk: Buffer | string) => this.consume(typeof chunk === "string" ? chunk : chunk.toString("utf8"));
-		child.stdout?.on("data", onData);
-		child.stderr?.on("data", onData);
-
-		await this.waitForReady();
-	}
-
-	/** stop the child and drop the process-exit hook (also used on failures) */
-	stop(): void {
-		if (this.exitHook) {
-			process.removeListener("exit", this.exitHook);
-			this.exitHook = null;
-		}
-		const child = this.child;
-		this.child = null;
-		if (child && child.exitCode === null) {
-			try {
-				child.kill("SIGTERM");
-			} catch {
-				/* already gone */
-			}
-		}
-		this.url = "";
-		this.connected = false;
-	}
-
-	/** resolve once a route is published, reject if cloudflared dies first */
-	private waitForReady(): Promise<void> {
-		return new Promise<void>((resolve, reject) => {
-			const deadline = Date.now() + STARTUP_TIMEOUT_MS;
-			const timer = setInterval(() => {
-				const finish = (err?: Error): void => {
-					clearInterval(timer);
-					if (err) {
-						this.stop();
-						reject(err);
-					} else {
-						resolve();
-					}
-				};
-				if (this.exited) {
-					return finish(new Error(this.lastError || "tunnel: cloudflared exited before publishing a route"));
-				}
-				if (this.cfg.mode === "quick" && this.url) return finish();
-				if (this.cfg.mode === "named" && this.connected) return finish();
-				if (Date.now() >= deadline) {
-					// named tunnels may still be handshaking: leave it running
-					if (this.cfg.mode === "named" && this.child) return finish();
-					return finish(new Error("tunnel: timed out waiting for cloudflared to publish the route"));
-				}
-			}, POLL_MS);
-		});
-	}
-
-	private consume(chunk: string): void {
-		for (const raw of chunk.split("\n")) {
-			let line = raw.trim();
-			if (line.length === 0) continue;
-			if (line.length > MAX_LINE_CHARS) line = line.slice(0, MAX_LINE_CHARS);
-			line = this.redact(line);
-			this.note(line);
-			if (this.cfg.mode === "quick" && !this.url) {
-				const m = line.match(QUICK_URL_RE);
-				if (m) this.url = m[0];
-			}
-			if (/registered tunnel connection/i.test(line)) this.connected = true;
-			if (!this.exited && /\berror\b/i.test(line)) this.lastError = line;
-		}
-	}
-
-	private note(line: string): void {
-		this.recent.push(line);
-		if (this.recent.length > MAX_LOG_LINES) this.recent.shift();
-	}
-
-	/** belt and braces: if cloudflared ever echoes the token, it never leaves */
-	private redact(line: string): string {
-		const t = this.cfg.token;
-		if (t && t.length >= 6 && line.includes(t)) return line.split(t).join("[redacted]");
-		return line;
-	}
-
-	status(): TunnelStatus {
-		const running = this.child !== null && this.child.exitCode === null;
-		const url = this.cfg.mode === "quick" ? this.url : this.cfg.hostname ?? "";
-		return {
-			mode: this.cfg.mode,
-			running,
-			connected: this.connected,
-			url: running ? url : "",
-			service: this.cfg.service,
-			uptime_sec: running ? Math.max(0, Math.floor((Date.now() - this.startedAt) / 1000)) : 0,
-			error: this.lastError || undefined,
-			recent: this.recent.slice(-5),
-		};
-	}
-}
-
-function fn(
-	name: string,
-	description: string,
-	parameters: Record<string, unknown>,
-	execute: (args: Record<string, unknown>) => Promise<unknown>,
-): AgentFunction {
-	return { name, description, parameters, execute, dangerous: false };
 }
 
 /** live runtime, set by init(); feeds tunnel_status and the startup note */
 let runtime: TunnelRuntime | null = null;
+/** agent-managed routes; set by init() (needs config) */
+let routes: RouteManager | null = null;
+let cfg: TunnelConfig | null = null;
+/** the protected base rule: operator hostname + service, never model input */
+let base: RouteBase = { service: '' };
+
+/** Extra argv for a config-driven (locally managed) tunnel. */
+function configArgs(configFile: string): string[] {
+	return ['--config', configFile, 'run', cfg!.tunnel_id!];
+}
+
+/** (Re)write the ingress file and run the base tunnel against it. */
+async function startBase(withConfig: boolean): Promise<void> {
+	if (!cfg) throw new Error('tunnel: not configured');
+	const args = withConfig && routes && cfg.tunnel_id ? configArgs(routes.writeConfig(base)) : [];
+	const next = new TunnelRuntime({ mode: cfg.mode, binary: cfg.binary, service: cfg.service, hostname: cfg.hostname, token: cfg.token }, args);
+	try {
+		await next.start();
+	} catch (err) {
+		next.stop();
+		throw err;
+	}
+	runtime = next;
+}
 
 export const Tunnel: Addon = {
-	name: "tunnel",
-	description: "Publishes the dashboard (or another local service) through a Cloudflare Tunnel with a public HTTPS route",
+	name: 'tunnel',
+	description: 'Publishes the dashboard (or another local service) through a Cloudflare Tunnel with a public HTTPS route',
 	functions: [], // built in init() (needs config)
 	init: async (config: AppConfig) => {
-		const cfg = getConfig(config);
-		// named mode without a token: the registry reports "not configured"
-		if (cfg.mode === "named" && !cfg.token) return false;
-		const next = new TunnelRuntime(cfg);
+		cfg = getConfig(config);
+		base = { hostname: cfg.hostname, service: cfg.service };
+		if (cfg.mode === 'quick' && cfg.tunnel_id) {
+			// a locally managed tunnel is only reachable in named mode
+			console.warn('[tunnel] addons.tunnel.tunnel_id is set but mode = "quick": quick tunnels only make ephemeral URLs (use mode = "named" for hostname routes)');
+		}
+		// named mode needs either a token or a locally managed tunnel id
+		if (cfg.mode === 'named' && !cfg.token && !cfg.tunnel_id) return false;
+
+		routes = new RouteManager(cfg);
+		// a host-route change rewrites the config and restarts the one process
+		// that serves them (rollback paths call this again with old state)
+		routes.onChanged = async () => {
+			runtime?.stop();
+			runtime = null;
+			// startBase rewrites the ingress file from the manager's CURRENT
+			// state, so a rollback + second call restores the old rules
+			await startBase(true);
+		};
+
 		try {
-			await next.start();
+			await startBase(Boolean(cfg.tunnel_id));
 		} catch (err) {
-			next.stop();
+			runtime = null;
 			throw err;
 		}
-		runtime = next;
-		Tunnel.functions = [
-			fn(
-				"tunnel_status",
-				"Get the state of the Cloudflare Tunnel that publishes the local service: public URL, uptime, last errors.",
-				{ type: "object", properties: {} },
-				async () => runtime?.status() ?? { error: "tunnel not running" },
-			),
-		];
+		if (cfg.tunnel_id && cfg.token) {
+			// be loud about the precedence instead of silently dropping one
+			console.warn('[tunnel] addons.tunnel.tunnel_id and a token are both set: tunnel_id wins (local ingress config)');
+		}
+
+		Tunnel.functions = buildFunctions(cfg, () => runtime?.status() ?? null, routes);
 		return true;
 	},
-	/** printed by the registry at startup: the public URL lands in the log */
+	/** printed by the registry at startup: the public URL/domain lands in the log */
 	startupNote: () => {
 		const s = runtime?.status();
-		if (!s || !s.running) return undefined;
-		if (s.mode === "quick") return `tunnel published ${s.url} (quick, forwarding to ${s.service})`;
-		const host = s.url.length > 0 ? s.url : "set in the Cloudflare dashboard";
-		return `tunnel started (named, forwarding to ${s.service}, hostname: ${host})`;
-	},
+		const c = cfg;
+		if (!c) return undefined;
+		const bits: string[] = [];
+		if (c.mode === 'quick') {
+			if (s?.running && s.url) bits.push(`tunnel published ${s.url} (quick, forwarding to ${c.service})`);
+			else return s?.error ? `tunnel warning: ${s.error}` : undefined;
+		} else {
+			const host = c.hostname ? `https://${c.hostname}` : '(no hostname configured)';
+			const kind = c.tunnel_id ? `named, local ingress via tunnel_id ${c.tunnel_id}` : 'named, token';
+			bits.push(`tunnel started (${kind}): ${host} -> ${c.service}`);
+			if (c.hostname) bits.push('tunnel hostname is operator-owned: the agent can read it but never change or remove it');
+			if (s && !s.running && s.error) bits.push(`tunnel warning: ${s.error}`);
+		}
+		if (c.allow_route_creation) {
+			const targets = c.allowed_domains.length > 0 ? c.allowed_domains.join(', ') : 'none (allowed_domains is empty, quick URLs only)';
+			bits.push(`tunnel routes: agent may create/edit/remove routes (max ${MAX_ROUTES}), publishable hostnames: ${targets}`);
+		}
+		return bits.join(' | ');
+	}
 };
+
+/**
+ * The agent-facing function list. Split out (and parameterized) so the
+ * allow_route_creation gate can be tested without spawning cloudflared.
+ */
+export function buildFunctions(c: TunnelConfig, status: () => TunnelStatus | null, routes: RouteManager): AgentFunction[] {
+	const out: AgentFunction[] = [
+		fn(
+			'tunnel_status',
+			'Get the state of the base Cloudflare Tunnel: public URL/hostname, uptime, last errors, local service.',
+			{ type: 'object', properties: {} },
+			async (): Promise<TunnelStatus> =>
+				status() ?? { mode: c.mode, running: false, connected: false, url: '', hostname: c.hostname ?? '', service: c.service, uptime_sec: 0, error: 'tunnel not running', recent: [] }
+		),
+		fn('tunnel_list_routes', "List every public route: the operator's base tunnel plus the ones you created (id, kind, service, url, running).", { type: 'object', properties: {} }, async () => {
+			const s = status();
+			return {
+				base: s ?? { running: false, url: '', hostname: c.hostname ?? '', service: c.service },
+				// hostname routes live inside the base process: report ITS state
+				// instead of claiming "running" while the tunnel is down
+				routes: routes.list().map((r) => (r.kind === 'hostname' ? { ...r, running: s?.running ?? false, uptime_sec: s?.uptime_sec ?? 0 } : r)),
+				max_routes: MAX_ROUTES,
+				allowed_domains: c.allowed_domains
+			};
+		})
+	];
+
+	if (c.allow_route_creation) {
+		out.push(
+			fn(
+				'tunnel_create_route',
+				'Publish a local HTTP service under a NEW public URL. Omit hostname for an ephemeral https://xxx.trycloudflare.com URL; ' +
+					'pass hostname to bind one of your allowed domains (needs a locally managed tunnel + DNS already pointing at it). ' +
+					'service must be a local address (http://127.0.0.1:8080 and friends).',
+				{
+					type: 'object',
+					properties: {
+						service: { type: 'string', description: 'local target, e.g. http://127.0.0.1:8080' },
+						hostname: { type: 'string', description: 'optional public hostname from allowed_domains, e.g. app.example.com' }
+					},
+					required: ['service']
+				},
+				async (a): Promise<RouteResult> => await routes.create(a.service, a.hostname),
+				true
+			),
+			fn(
+				'tunnel_edit_route',
+				'Point an existing route at another local service (quick routes), or change its service/hostname (hostname routes).',
+				{
+					type: 'object',
+					properties: {
+						route_id: { type: 'string', description: 'id from tunnel_list_routes' },
+						service: { type: 'string', description: 'new local target, e.g. http://127.0.0.1:9000' },
+						hostname: { type: 'string', description: 'hostname routes only: new hostname from allowed_domains' }
+					},
+					required: ['route_id']
+				},
+				async (a): Promise<RouteResult> => await routes.edit(a.route_id, a.service, a.hostname),
+				true
+			),
+			fn(
+				'tunnel_remove_route',
+				"Stop publishing a route you created (its public URL dies). The operator's base tunnel is not a route and cannot be removed.",
+				{ type: 'object', properties: { route_id: { type: 'string', description: 'id from tunnel_list_routes' } }, required: ['route_id'] },
+				async (a): Promise<RouteResult> => await routes.remove(a.route_id),
+				true
+			)
+		);
+	}
+	return out;
+}

@@ -1,31 +1,33 @@
 // Entry point: load config, open the DB, load modules, start dashboard + bot.
 
-import { loadConfig } from "./utils/config.js";
-import { loadToggles, saveToggles } from "./utils/toggles.js";
-import { Logger } from "./utils/logger.js";
-import SQLiteDB from "./db/sqlite.js";
-import { ToolRegistry } from "./modules/tools.js";
-import { SkillRegistry } from "./modules/skills.js";
-import { AddonRegistry } from "./modules/addons.js";
-import { buildAgent, addonFunctionsToTools, registryToAgentTools } from "./agent/factory.js";
-import { startDashboard } from "./dashboard/server.js";
-import { hashPasscode, SessionStore, LoginLimiter } from "./dashboard/auth.js";
-import { LiveBus } from "./dashboard/live.js";
-import { createDB } from "./db/index.js";
-import { ToolRunRow, AuditRow } from "./db/struct.js";
-import { startBot } from "./bot.js";
-import { ToolContext } from "./modules/types.js";
-import { DashboardDeps } from "./dashboard/handlers.js";
+import { loadConfig } from './utils/config.js';
+import { loadToggles, saveToggles } from './utils/toggles.js';
+import { Logger } from './utils/logger.js';
+import SQLiteDB from './db/sqlite.js';
+import { ToolRegistry } from './modules/tools.js';
+import { SkillRegistry } from './modules/skills.js';
+import { AddonRegistry } from './modules/addons.js';
+import { managementTools } from './modules/manage.js';
+import { setRuntime as setCronRuntime } from '../modules/addons/cron.js';
+import { buildAgent, addonFunctionsToTools, registryToAgentTools } from './agent/factory.js';
+import { startDashboard } from './dashboard/server.js';
+import { hashPasscode, SessionStore, LoginLimiter } from './dashboard/auth.js';
+import { LiveBus } from './dashboard/live.js';
+import { createDB } from './db/index.js';
+import { ToolRunRow, AuditRow } from './db/struct.js';
+import { startBot } from './bot.js';
+import { ToolContext } from './modules/types.js';
+import { DashboardDeps } from './dashboard/handlers.js';
 // .env is loaded natively by Bun (shell env still wins over the file)
 
 async function main(): Promise<void> {
 	const config = loadConfig();
 	if (config.logging.file) Logger.addFileSink(config.logging.file);
-	const log = new Logger(config.logging.level, "main");
-	log.info("starting discord-ai...");
+	const log = new Logger(config.logging.level, 'main');
+	log.info('starting discord-ai...');
 
 	if (!config.bot.token) {
-		log.error("no discord token: set DISCORD_TOKEN in the environment or bot.token in config.toml");
+		log.error('no discord token: set DISCORD_TOKEN in the environment or bot.token in config.toml');
 		process.exit(1);
 	}
 
@@ -41,7 +43,7 @@ async function main(): Promise<void> {
 			saveToggles({
 				tools: Object.fromEntries(tools.runtimeDisabledNames().map((n) => [n, false])),
 				skills: Object.fromEntries(skills.runtimeDisabledNames().map((n) => [n, false])),
-				addons: Object.fromEntries(addons.runtimeDisabledNames().map((n) => [n, false])),
+				addons: Object.fromEntries(addons.runtimeDisabledNames().map((n) => [n, false]))
 			});
 		} catch (err) {
 			log.warn(`could not persist toggles: ${(err as Error).message}`);
@@ -56,15 +58,17 @@ async function main(): Promise<void> {
 	for (const name of Object.keys(toggles.addons)) {
 		if (toggles.addons[name] === false) addons.setEnabled(name, false);
 	}
-	log.info(`addons active: ${addonStats.loaded.join(", ") || "(none)"}` +
-		`${addonStats.ignored.length > 0 ? ` | ignored (settings section exists but slug not in addons.enabled): ${addonStats.ignored.join(", ")}` : ""}` +
-		`${addonStats.unknown.length > 0 ? ` | unknown: ${addonStats.unknown.join(", ")}` : ""}`);
+	log.info(
+		`addons active: ${addonStats.loaded.join(', ') || '(none)'}` +
+			`${addonStats.ignored.length > 0 ? ` | ignored (settings section exists but slug not in addons.enabled): ${addonStats.ignored.join(', ')}` : ''}` +
+			`${addonStats.unknown.length > 0 ? ` | unknown: ${addonStats.unknown.join(', ')}` : ''}`
+	);
 	for (const note of addonStats.notes) log.info(note);
 
 	const tools = new ToolRegistry(config);
 	tools.setContext({
 		extraVars: addons.extraVars(),
-		envAccess: config.skills.allowEnvAccess === true,
+		envAccess: config.skills.allowEnvAccess === true
 	});
 	const toolStats = tools.loadAll();
 	// apply persisted runtime toggles after loading (overrides config)
@@ -72,7 +76,7 @@ async function main(): Promise<void> {
 		if (enabled === false) tools.setEnabled(name, false);
 		else if (tools.get(name)) tools.setEnabled(name, true);
 	}
-	log.info(`tools loaded: ${toolStats.loaded.join(", ") || "(none)"}${toolStats.skipped.length > 0 ? ` | skipped: ${toolStats.skipped.join(", ")}` : ""}`);
+	log.info(`tools loaded: ${toolStats.loaded.join(', ') || '(none)'}${toolStats.skipped.length > 0 ? ` | skipped: ${toolStats.skipped.join(', ')}` : ''}`);
 
 	const skills = new SkillRegistry(config);
 	const skillStats = skills.loadAll();
@@ -80,38 +84,44 @@ async function main(): Promise<void> {
 		if (enabled === false) skills.setEnabled(name, false);
 		else if (skills.get(name)) skills.setEnabled(name, true);
 	}
-	log.info(`skills loaded: ${skillStats.loaded.join(", ") || "(none)"}${skillStats.skipped.length > 0 ? ` | skipped: ${skillStats.skipped.join(", ")}` : ""}`);
+	log.info(`skills loaded: ${skillStats.loaded.join(', ') || '(none)'}${skillStats.skipped.length > 0 ? ` | skipped: ${skillStats.skipped.join(', ')}` : ''}`);
 
 	// ----- dashboard auth + live updates -----
 	const passcode = config.http.passcode;
 	if (!passcode) {
-		log.error(`no dashboard passcode: set ${config.http.passcode_env ?? "DASHBOARD_PASSCODE"} (or [http].passcode). refusing to start with an unprotected dashboard`);
+		log.error(`no dashboard passcode: set ${config.http.passcode_env ?? 'DASHBOARD_PASSCODE'} (or [http].passcode). refusing to start with an unprotected dashboard`);
 		process.exit(1);
 	}
 	const auth = {
 		passcodeHash: hashPasscode(passcode),
 		sessions: new SessionStore(),
-		limiter: new LoginLimiter(),
+		limiter: new LoginLimiter()
 	};
 	const live = new LiveBus(log);
 
 	// tap tool runs + audit entries in the DB layer for live broadcasting
-	db.setOnToolRun((entry: ToolRunRow) => live.emit({
-				kind: "tool.run",
-				tool: entry.tool,
-				caller: entry.caller_id,
-				ok: entry.success === 1,
-				ms: entry.duration_ms,
-				error: entry.error || undefined,
-			}));
-	db.setOnAudit((entry: AuditRow) => live.emit({ kind: "audit", action: entry.action, actor: entry.actor_id, target: entry.target }));
+	db.setOnToolRun((entry: ToolRunRow) =>
+		live.emit({
+			kind: 'tool.run',
+			tool: entry.tool,
+			caller: entry.caller_id,
+			ok: entry.success === 1,
+			ms: entry.duration_ms,
+			error: entry.error || undefined
+		})
+	);
+	db.setOnAudit((entry: AuditRow) => live.emit({ kind: 'audit', action: entry.action, actor: entry.actor_id, target: entry.target }));
 
-	const dashLog = log.child("dashboard");
+	const dashLog = log.child('dashboard');
 	const deps: DashboardDeps = {
-		config, db, tools, skills, addons,
-		log: (level: "info" | "warn" | "error", m: string) => dashLog[level](m),
+		config,
+		db,
+		tools,
+		skills,
+		addons,
+		log: (level: 'info' | 'warn' | 'error', m: string) => dashLog[level](m),
 		live,
-		onToggle: persistToggles,
+		onToggle: persistToggles
 	};
 	await startDashboard(deps, config, dashLog, auth, live);
 
@@ -120,7 +130,7 @@ async function main(): Promise<void> {
 	// so `!tool` runs and the agent's own tool calls hit the same sandbox
 	const toolCtx: ToolContext = {
 		config,
-		log: (level, msg) => log[level](msg),
+		log: (level, msg) => log[level](msg)
 	};
 
 	// the tool list is built once, so the invoker re-checks addon state at
@@ -128,20 +138,35 @@ async function main(): Promise<void> {
 	const agentTools = addonFunctionsToTools(
 		addons.agentFunctions(),
 		async (name, target) => {
-			await db.audit({ actor_id: "agent", action: `addon.${name}`, target: target.slice(0, 120), details: "{}" });
+			await db.audit({ actor_id: 'agent', action: `addon.${name}`, target: target.slice(0, 120), details: '{}' });
 		},
-		(fnName) => addons.functionEnabled(fnName),
+		(fnName) => addons.functionEnabled(fnName)
 	);
 	// enabled .tl tools are callable by the model too (registry re-checks toggles)
 	agentTools.push(...registryToAgentTools(tools, toolCtx, db));
-	const agent = buildAgent(db, config, agentTools, log); // appends the brain tools
-	log.info(`agent functions: ${agentTools.map((t) => t.name).join(", ") || "(none)"}`);
+	// self-management (manage_tool / manage_skill): only when the operator
+	// turned allow_tool_creation / allow_skill_creation on
+	const mgmt = managementTools({
+		config,
+		tools,
+		skills,
+		db,
+		log: (level, m) => log[level](m),
+		// no .tl tool may shadow an addon function (duplicate names in the schema)
+		reservedNames: addons.agentFunctions().map((f) => f.name)
+	});
+	if (mgmt.length > 0) {
+		agentTools.push(...mgmt);
+		log.info(`self-management enabled: ${mgmt.map((t) => t.name).join(', ')}`);
+	}
+	const agent = buildAgent(db, config, agentTools, log, addons.names()); // appends the brain tools
+	log.info(`agent functions: ${agentTools.map((t) => t.name).join(', ') || '(none)'}`);
 	deps.agentState = () => agent?.status;
 	// runtime truth for the model: a tool/skill toggle in the dashboard hides the
 	// tool from the system prompt AND from the schema sent to the provider
 	if (agent) {
 		agent.toolFilter = (name: string) => {
-			if (name.startsWith("brain_")) return true; // the brain's own tools, always there
+			if (name.startsWith('brain_') || name.startsWith('manage_')) return true; // agent-native tools, always there
 			if (tools.get(name) !== undefined) return tools.isEnabled(name); // a .tl tool
 			return addons.functionEnabled(name); // an addon function
 		};
@@ -151,16 +176,18 @@ async function main(): Promise<void> {
 	// the status card reads deps.client on every request: without this the
 	// dashboard showed "discord: offline" forever, even with the bot connected
 	deps.client = client;
+	// cron jobs can only run once the agent + client exist (loads saved jobs)
+	if (addons.names().includes('cron')) setCronRuntime({ db, agent, client, log: (level, m) => log[level](m) });
 	void client;
 
 	// graceful shutdown: close the database cleanly on SIGINT/SIGTERM
-	process.on("SIGINT", () => {
-		log.info("shutting down, closing database...");
+	process.on('SIGINT', () => {
+		log.info('shutting down, closing database...');
 		db.close();
 		process.exit(0);
 	});
-	process.on("SIGTERM", () => {
-		log.info("shutting down, closing database...");
+	process.on('SIGTERM', () => {
+		log.info('shutting down, closing database...');
 		db.close();
 		process.exit(0);
 	});
@@ -169,6 +196,6 @@ async function main(): Promise<void> {
 // entry point invocation (was missing in every commit: the file only ever
 // *declared* main, so running the app loaded it and did nothing)
 main().catch((err: unknown) => {
-	console.error("[main] fatal:", err instanceof Error ? (err.stack ?? err.message) : String(err));
+	console.error('[main] fatal:', err instanceof Error ? (err.stack ?? err.message) : String(err));
 	process.exit(1);
 });

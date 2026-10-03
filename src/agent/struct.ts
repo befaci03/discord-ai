@@ -3,11 +3,11 @@
 // model routing) lives in ./brain.js and is re-exported here, so existing
 // `import { Brain } from "./struct.js"` callers keep working.
 
-import { type Presence, type Role, type VoiceState, type PresenceStatus } from "discord.js";
-import { ChatCompletion } from "openai/resources.mjs";
+import { type Presence, type Role, type VoiceState, type PresenceStatus } from 'discord.js';
+import { ChatCompletion } from 'openai/resources.mjs';
 
-export { Brain, MEMORY_DEFAULT, looksLikeCode } from "./brain.js";
-export type { BrainSeed, ChatTurn, PersonSeed } from "./brain.js";
+export { Brain, MEMORY_DEFAULT, looksLikeCode } from './brain.js';
+export type { BrainSeed, ChatTurn, PersonSeed } from './brain.js';
 
 export interface AskOptions {
 	/** force a model type; when omitted, code-ish prompts route to the coding model */
@@ -16,6 +16,12 @@ export interface AskOptions {
 	ephemeral?: boolean;
 	/** numeric Discord id of the speaker: their saved profile is injected into the system prompt */
 	speakerId?: string;
+	/**
+	 * Called once per tool round with the tool names the model is about to
+	 * call (before they run), so the caller can show progress. Never throws
+	 * into the loop: a broken hook is swallowed.
+	 */
+	onToolCall?: (toolNames: string[]) => void;
 }
 
 export interface Provider {
@@ -24,7 +30,7 @@ export interface Provider {
 	apiKey: string;
 }
 
-export type ModelType = "default" | "coding" | "image" | "video" | "tts" | "stt";
+export type ModelType = 'default' | 'coding' | 'image' | 'video' | 'tts' | 'stt' | 'rerank';
 
 export interface Model {
 	type: ModelType;
@@ -65,8 +71,8 @@ export interface Tool {
 
 export interface AgentStatus {
 	busy: boolean;
-	doing: string | "nothing much, just looking at messages";
-	mode: "talking" | "coding" | "idle";
+	doing: string | 'nothing much, just looking at messages';
+	mode: 'talking' | 'coding' | 'idle';
 }
 
 export interface Message {

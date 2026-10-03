@@ -4,10 +4,10 @@
 // injected into its system prompt. Complementary to tools (.tl) which are
 // executable code.
 
-import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
-import * as path from "node:path";
-import * as toml from "toml";
-import { LoadedSkill, ModuleError } from "./types.js";
+import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
+import * as path from 'node:path';
+import * as toml from 'toml';
+import { LoadedSkill, ModuleError } from './types.js';
 
 export interface SkillMatch {
 	skill: LoadedSkill;
@@ -15,13 +15,20 @@ export interface SkillMatch {
 	matched: string;
 }
 
+/**
+ * Skills the agent may never create, edit or delete through manage_skill.
+ * TOOLANG.md is the language reference: let an LLM rewrite it and the next
+ * generation of tools inherits the damage.
+ */
+export const PROTECTED_SKILLS: readonly string[] = ['toolang'];
+
 export class SkillRegistry {
 	private skills = new Map<string, LoadedSkill>();
 	/** runtime overrides set from the dashboard (win over config at runtime) */
 	private runtimeDisabled = new Set<string>();
 	private runtimeEnabled = new Set<string>();
 
-	constructor(private config: import("../utils/config.js").AppConfig) {}
+	constructor(private config: import('../utils/config.js').AppConfig) {}
 
 	/** True when the skill is loaded AND not disabled (config/runtime/frontmatter). */
 	isEnabled(name: string): boolean {
@@ -54,11 +61,14 @@ export class SkillRegistry {
 	loadAll(): { loaded: string[]; skipped: string[] } {
 		const loaded: string[] = [];
 		const skipped: string[] = [];
+		// rebuild from disk: a skill deleted on disk (e.g. via manage_skill)
+		// must disappear here, not stay cached forever
+		this.skills.clear();
 		for (const dir of this.config.skills.directories) {
 			const abs = path.resolve(dir);
 			if (!existsSync(abs) || !statSync(abs).isDirectory()) continue;
 			for (const entry of readdirSync(abs)) {
-				if (!entry.endsWith(".md")) continue;
+				if (!entry.endsWith('.md')) continue;
 				const name = entry.slice(0, -5);
 				if (this.config.skills.disabled.includes(name)) {
 					skipped.push(name);
@@ -78,37 +88,7 @@ export class SkillRegistry {
 	}
 
 	private parseSkill(filePath: string): LoadedSkill {
-		const raw = readFileSync(filePath, "utf-8");
-		const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(raw);
-		if (!match) throw new ModuleError("skill file must start with a TOML frontmatter block (--- ... ---)");
-		let meta: Record<string, unknown>;
-		try {
-			meta = toml.parse(match[1]) as Record<string, unknown>;
-		} catch (err) {
-			throw new ModuleError(`bad skill frontmatter: ${(err as Error).message}`);
-		}
-		const name = String(meta.name ?? path.basename(filePath, ".md"));
-		if (!/^[a-z][a-z0-9_]{1,63}$/.test(name)) throw new ModuleError(`invalid skill name '${name}'`);
-		const triggers = Array.isArray(meta.triggers) ? meta.triggers.map(String) : [];
-		if (triggers.length === 0) throw new ModuleError(`skill '${name}' needs at least one trigger`);
-		const instructions = match[2].trim();
-		if (instructions.length === 0) throw new ModuleError(`skill '${name}' has no instructions body`);
-		const rawExamples = Array.isArray(meta.examples) ? meta.examples : [];
-		return {
-			name,
-			description: String(meta.description ?? ""),
-			path: filePath,
-			triggers,
-			instructions,
-			tools: Array.isArray(meta.tools) ? meta.tools.map(String) : [],
-			examples: rawExamples.map((e) => {
-				if (!e || typeof e !== "object") return { description: "", code: "" };
-				const ex = e as Record<string, unknown>;
-				return { description: String(ex.description ?? ""), code: String(ex.code ?? "") };
-			}),
-			priority: Number(meta.priority ?? 0) || 0,
-			enabled: meta.enabled !== false,
-		};
+		return parseSkillSource(readFileSync(filePath, 'utf-8'), filePath);
 	}
 
 	/**
@@ -123,10 +103,12 @@ export class SkillRegistry {
 			if (!this.isEnabled(skill.name)) continue;
 			for (const trigger of skill.triggers) {
 				let fired: string | null = null;
-				if (trigger.startsWith("/") && trigger.endsWith("/") && trigger.length > 2) {
+				if (trigger.startsWith('/') && trigger.endsWith('/') && trigger.length > 2) {
 					try {
-						if (new RegExp(trigger.slice(1, -1), "i").test(message)) fired = trigger;
-					} catch { /* bad regex in config: skip it */ }
+						if (new RegExp(trigger.slice(1, -1), 'i').test(message)) fired = trigger;
+					} catch {
+						/* bad regex in config: skip it */
+					}
 				} else if (text.includes(trigger.toLowerCase())) {
 					fired = trigger;
 				}
@@ -146,13 +128,13 @@ export class SkillRegistry {
 	 */
 	promptFor(message: string, maxChars = 12_000): string {
 		const matches = this.match(message);
-		if (matches.length === 0) return "";
+		if (matches.length === 0) return '';
 		const parts: string[] = [];
 		let total = 0;
 		for (const { skill, matched } of matches) {
 			let block = `### Skill: ${skill.name}\n`;
 			block += `(activated by trigger: ${matched})\n`;
-			if (skill.tools.length > 0) block += `Recommended tools: ${skill.tools.join(", ")}\n`;
+			if (skill.tools.length > 0) block += `Recommended tools: ${skill.tools.join(', ')}\n`;
 			for (const ex of skill.examples) {
 				if (ex.description || ex.code) block += `Example: ${ex.description}\n\`\`\`tl\n${ex.code}\n\`\`\`\n`;
 			}
@@ -164,7 +146,7 @@ export class SkillRegistry {
 			total += block.length;
 			parts.push(block);
 		}
-		return `You have activated the following skills. Follow their instructions.\n\n${parts.join("\n")}`;
+		return `You have activated the following skills. Follow their instructions.\n\n${parts.join('\n')}`;
 	}
 
 	/**
@@ -174,12 +156,12 @@ export class SkillRegistry {
 	 */
 	overview(maxSkills = 10, maxChars = 1_500): string {
 		const list = this.enabledAll().slice(0, maxSkills);
-		if (list.length === 0) return "";
+		if (list.length === 0) return '';
 		const lines = list.map((s) => {
-			const triggers = s.triggers.slice(0, 5).join(", ");
-			return `- ${s.name}: ${s.description.replace(/\s+/g, " ").slice(0, 120)}${triggers ? ` [keywords: ${triggers}]` : ""}`;
+			const triggers = s.triggers.slice(0, 5).join(', ');
+			return `- ${s.name}: ${s.description.replace(/\s+/g, ' ').slice(0, 120)}${triggers ? ` [keywords: ${triggers}]` : ''}`;
 		});
-		const body = lines.join("\n").slice(0, maxChars);
+		const body = lines.join('\n').slice(0, maxChars);
 		return `Skills loaded (their full instructions are injected automatically when your message hits one):\n${body}`;
 	}
 
@@ -207,4 +189,42 @@ export class SkillRegistry {
 	count(): number {
 		return this.skills.size;
 	}
+}
+
+/**
+ * Parse one skill file's content. Exported so manage_skill can validate a
+ * skill BEFORE it is written to disk: the exact same rules apply, so a
+ * written file always loads (and a rejected one never exists).
+ */
+export function parseSkillSource(raw: string, filePath: string): LoadedSkill {
+	const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(raw);
+	if (!match) throw new ModuleError('skill file must start with a TOML frontmatter block (--- ... ---)');
+	let meta: Record<string, unknown>;
+	try {
+		meta = toml.parse(match[1]) as Record<string, unknown>;
+	} catch (err) {
+		throw new ModuleError(`bad skill frontmatter: ${(err as Error).message}`);
+	}
+	const name = String(meta.name ?? path.basename(filePath, '.md'));
+	if (!/^[a-z][a-z0-9_]{1,63}$/.test(name)) throw new ModuleError(`invalid skill name '${name}'`);
+	const triggers = Array.isArray(meta.triggers) ? meta.triggers.map(String) : [];
+	if (triggers.length === 0) throw new ModuleError(`skill '${name}' needs at least one trigger`);
+	const instructions = match[2].trim();
+	if (instructions.length === 0) throw new ModuleError(`skill '${name}' has no instructions body`);
+	const rawExamples = Array.isArray(meta.examples) ? meta.examples : [];
+	return {
+		name,
+		description: String(meta.description ?? ''),
+		path: filePath,
+		triggers,
+		instructions,
+		tools: Array.isArray(meta.tools) ? meta.tools.map(String) : [],
+		examples: rawExamples.map((e) => {
+			if (!e || typeof e !== 'object') return { description: '', code: '' };
+			const ex = e as Record<string, unknown>;
+			return { description: String(ex.description ?? ''), code: String(ex.code ?? '') };
+		}),
+		priority: Number(meta.priority ?? 0) || 0,
+		enabled: meta.enabled !== false
+	};
 }

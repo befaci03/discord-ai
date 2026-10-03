@@ -1,12 +1,18 @@
 [bot]
-token = "${DISCORD_TOKEN}" # or set DISCORD_TOKEN env var
+token = "${DISCORD_TOKEN}"          # or set DISCORD_TOKEN env var
 client_id = "${DISCORD_CLIENT_ID}"
-guild_id = "" # optional: scope slash commands to one guild
+guild_id = ""                       # optional: scope slash commands to one guild
 status = "watching the server burn" # presence text
+
+[general]
+# shown in the channel while the agent works through tool calls: sent on the
+# first call, EDITED on every following call, deleted before the final reply.
+# [TOOL_NAME] is replaced with the tool(s) being called. "" = never post it.
+execution_message = ":thinking: *Executing `[TOOL_NAME]`...*"
 
 [http]
 # this is used for a private dashboard.. and some endpoints for the agent
-host = "127.0.0.1" # obviously recommended to keep it like that
+host = "127.0.0.1"          # obviously recommended to keep it like that
 port = 3000
 allowed_ips = ["127.0.0.1"] # only allow your ip to access the dashboard
 # prefer the env var (DASHBOARD_PASSCODE), or set passcode directly:
@@ -24,14 +30,14 @@ path = "modules/data.sqlite"
 [database.mariadb]
 host = "127.0.0.1"
 port = 3306
-username = ""   # set ${DB_USER} etc in the environment
+username = ""           # set ${DB_USER} etc in the environment
 password = ""
 database = "discord_ai"
 
 [database.postgres]
 host = "127.0.0.1"
 port = 5432
-username = ""   # set ${DB_USER} etc in the environment
+username = ""           # set ${DB_USER} etc in the environment
 password = ""
 database = "discord_ai"
 
@@ -48,9 +54,17 @@ local_datacenter = "datacenter1"
 keyspace = "discord_ai"
 
 [docker]
-enabled = false # master switch, also gates the docker_* tools the agent sees
+enabled = false                      # master switch, also gates the docker_* tools the agent sees
 host = "unix:///var/run/docker.sock"
-allowed_ports = ["3456-35665"] # what ports can the llm use (ranges "lo-hi" or single)
+allowed_ports = ["3456-35665"]       # what ports can the llm use (ranges "lo-hi" or single)
+# where published ports are bound: loopback = only this machine can reach them.
+# set "0.0.0.0" to expose them on every interface (only loopback/private/
+# 0.0.0.0 are accepted, anything else is refused at call time).
+bind_address = "127.0.0.1"
+# host paths the llm may bind-mount into containers (resolved at load).
+# empty = every host mount is refused: without this the llm could mount /etc
+# into a container and read it back. e.g. ["/srv/work"]
+allowed_volume_paths = []
 max_containers = 100
 default_image = "debian:bookworm"
 # do not put EXACT images, but what you want to disallow #
@@ -62,12 +76,12 @@ level = "info" # debug | info | warn | error
 
 [tools]
 directories = ["modules/tools"] # scan these folders for *.tl
-disabled = [] # tool names to skip, e.g. ["run_cmd"]
+disabled = []                   # tool names to skip, e.g. ["run_cmd"]
 
 [skills]
 directories = ["modules/skills"]
-disabled = [] # skill names to skip
-allow_env_access = false # never enable this unless you know why
+disabled = []                    # skill names to skip
+allow_env_access = false         # never enable this unless you know why
 
 [agent]
 name = "Agent"
@@ -79,12 +93,12 @@ prompt = "You are a helpful Discord agent." # prepended to the system prompt
 # the agent's brain: rolling conversation memory + what it starts out liking.
 # lists below are only the STARTING point, the agent keeps its own changes
 # across restarts (it edits them with brain_set_preference).
-memory = 30 # remembered conversation turns (0 = no memory, clamped to 0..200)
-reset = false # true = forget saved brain state at boot and re-seed from here
-likes = [] # e.g. ["rust", "quiet servers"]
-dislikes = [] # e.g. ["php", "crypto ads"]
+memory = 30    # remembered conversation turns (0 = no memory, clamped to 0..200)
+reset = false  # true = forget saved brain state at boot and re-seed from here
+likes = []     # e.g. ["rust", "quiet servers"]
+dislikes = []  # e.g. ["php", "crypto ads"]
 favorites = [] # e.g. ["shell scripting"]
-pending = [] # what it wants to get better at, e.g. ["learn japanese"]
+pending = []   # what it wants to get better at, e.g. ["learn japanese"]
 
 # people the agent should already know (key = numeric Discord user id)
 [agent.brain.people]
@@ -97,14 +111,17 @@ max_call_depth = 64
 max_steps = 200000
 max_output_length = 100000
 tool_timeout_ms = 30000
+# give the AGENT the manage_tool / manage_skill functions so it can create,
+# edit and delete its own .tl tools / .md skills at runtime (validated +
+# audit-logged; false = the functions are not even offered to the model)
 allow_tool_creation = true
 allow_skill_creation = false
 
 [agent.toolang.http]
-block_private = true # refuse localhost/private ranges (SSRF protection)
-allowed_hosts = [] # empty = allow all, e.g. ["api.github.com", "*.example.com"]
-blocked_hosts = [] # priority over allowlist
-allowed_methods = [] # empty = all of GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS
+block_private = true          # refuse localhost/private ranges (SSRF protection)
+allowed_hosts = []            # empty = allow all, e.g. ["api.github.com", "*.example.com"]
+blocked_hosts = []            # priority over allowlist
+allowed_methods = []          # empty = all of GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS
 max_response_bytes = 20000000
 timeout_ms = 20000
 
@@ -112,11 +129,11 @@ timeout_ms = 20000
 # sandboxed filesystem for the `fs` module: everything is jailed inside root
 root = "./sandbox"
 max_file_size = 5000000 # bytes
-allow_write = true # reads only when false
+allow_write = true      # reads only when false
 
 [agent.toolang.node]
 # `node.child_proc.run` policy
-enabled = false # master switch
+enabled = false       # master switch
 timeout_ms = 30000
 allowed_commands = [] # empty = all except denied
 # denied_commands defaults to sudo/su/dd/curl/wget/nc/ssh/etc when empty
@@ -128,16 +145,16 @@ anthropic = { api_type = 0, base_url = "https://api.anthropic.com", api_key = "$
 gemini = { api_type = 1, base_url = "https://generativelanguage.googleapis.com/v1beta/openai", api_key = "${GEMINI_API_KEY}" }
 
 [agent.models]
-use_same_models = true # will always use the default model
+use_same_models = true                                         # will always use the default model
 default_model = { provider = "openai", model = "gpt-4o-mini" }
 # if false, will use the default
 coding_model = [{ enabled = true, provider = "openai", model = "gpt-4o-mini" }]
 # if false/enabled=false, any x features won't be available
-image_model = [{ enabled = false, provider = "gemini", model = "nano-banana" }]  # Image Generation
+image_model = [{ enabled = false, provider = "gemini", model = "nano-banana" }]   # Image Generation
 video_model = [{ enabled = false, provider = "gemini", model = "little-banana" }] # Video Generation
-tts_model = [{ enabled = false, provider = "openai", model = "tts-1" }]          # Text-to-Speech
-stt_model = [{ enabled = false, provider = "openai", model = "stt-1" }]          # Speech-to-Text
-rerank_model = [{ enabled = false, provider = "openai", model = "" }]            # Reranker
+tts_model = [{ enabled = false, provider = "openai", model = "tts-1" }]           # Text-to-Speech
+stt_model = [{ enabled = false, provider = "openai", model = "stt-1" }]           # Speech-to-Text
+rerank_model = [{ enabled = false, provider = "openai", model = "" }]             # Reranker
 
 # ------------------------------------------------------------------
 # Addons: give the AGENT extra capabilities (LLM-callable functions)
@@ -148,7 +165,7 @@ rerank_model = [{ enabled = false, provider = "openai", model = "" }]           
 # (use the [addons] header below, NOT "addons.enabled = ..." dotted form:
 #  after a table header like [agent.models] a dotted key lands in that table)
 [addons]
-enabled = ["weather"] # e.g. ["github", "weather", "tunnel", "smtp"]
+enabled = ["weather"] # e.g. ["github", "weather", "tunnel", "smtp", "cron"]
 
 # per-addon settings (all optional, secrets should be env vars)
 # having this section does NOT enable github; only addons.enabled does
@@ -156,17 +173,28 @@ enabled = ["weather"] # e.g. ["github", "weather", "tunnel", "smtp"]
 # token = "ghp_xxx"
 default_owner = "" # so the agent can say repo "myrepo" instead of "me/myrepo"
 allowed_repos = [] # empty = agent can touch ANY repo the token allows.
+# hard gates on what the agent may do to REPOSITORIES (issues/PRs above are
+# always available once the addon is enabled, they are audit-logged):
+allow_repo_creation = false # create/fork repos, edit repo metadata, create branches
+allow_repo_deletion = false # delete repos (needs a token with delete_repo scope) + delete branches
 
 [addons.tunnel]
 # publishes the dashboard (or another local service) through a Cloudflare
 # Tunnel: cloudflared creates a public HTTPS route, no open firewall port.
 # requires the `cloudflared` binary: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
-mode = "quick" # quick = ephemeral https://xxx.trycloudflare.com route (no account) | named = your own hostname
+mode = "quick"         # quick = ephemeral https://xxx.trycloudflare.com route (no account) | named = your own hostname
 binary = "cloudflared" # full path if it is not on PATH
-service = "" # "" = the dashboard (http://<http.host>:<http.port>), or e.g. "http://127.0.0.1:8080"
+service = ""           # "" = the dashboard (http://<http.host>:<http.port>), or e.g. "http://127.0.0.1:8080"
 # named mode only: keep the token in the environment, never in this file
 # token = "${CF_TUNNEL_TOKEN}"
 hostname = "" # named mode only: your public hostname, e.g. "dash.example.com" (created in the CF dashboard)
+# route management by the agent (all four are refused unless allow_route_creation):
+allow_route_creation = false # lets the agent create/edit/list/remove public routes
+allowed_domains = []         # hostnames the agent may publish, e.g. ["example.com", "*.example.com"]; empty = no hostname routes
+# hostname routes need a LOCALLY managed tunnel (ingress rules live in a config
+# file, token tunnels get their rules from the Cloudflare dashboard):
+# tunnel_id = "6ff42ae2-..." # uuid or name from `cloudflared tunnel create`
+# credentials_file = "" # "" = ~/.cloudflared/<tunnel_id>.json when it exists
 # note: published dashboard traffic arrives from localhost, so allowed_ips in
 # [http] stops being a network barrier - the passcode is the real barrier.
 
@@ -174,17 +202,28 @@ hostname = "" # named mode only: your public hostname, e.g. "dash.example.com" (
 # lets the agent send email through your SMTP relay (nodemailer, pure JS,
 # no shell). host + from are REQUIRED once "smtp" joins addons.enabled,
 # otherwise the addon reports "not configured" and loads nothing.
-host = "" # e.g. "smtp.example.com"
-port = 587 # 587 = STARTTLS, 465 = implicit TLS (then set secure = true)
+host = ""      # e.g. "smtp.example.com"
+port = 587     # 587 = STARTTLS, 465 = implicit TLS (then set secure = true)
 secure = false # true = TLS from the first byte (SMTPS, usually port 465)
 # user = "" # optional relay auth
 # pass = "" # keep the password out of this file: pass = "${SMTP_PASSWORD}"
-from = "" # REQUIRED sender identity, e.g. "My Bot <bot@example.com>"
+from = ""               # REQUIRED sender identity, e.g. "My Bot <bot@example.com>"
 allowed_recipients = [] # empty = the agent may email ANYONE. Strongly
 # recommended: list exact addresses ("me@example.com") or "@example.com"
 # domain entries so a prompt-injected agent can only ever reach your inbox.
-require_tls = true # refuse sessions that cannot upgrade to TLS (TLSv1.2+)
+require_tls = true  # refuse sessions that cannot upgrade to TLS (TLSv1.2+)
 timeout_ms = 15000
 attachment_dir = "" # "" = the toolang fs root (./sandbox); attachments are
 # realpath-jailed inside this directory with size caps, the agent can never
 # attach config.toml, .env or anything outside of it.
+
+[addons.cron]
+# scheduled jobs: at the schedule the agent runs a prompt (ephemeral, its
+# conversation memory is untouched) and posts the answer into a channel.
+# jobs are saved in the database, so they survive restarts.
+allow_job_creation = false # let the agent add/remove/run jobs itself
+max_jobs = 10              # hard cap on saved jobs (clamped to 1..50)
+allowed_channels = []      # numeric channel ids the agent may schedule into;
+# empty = any channel the bot can see. Listing them is strongly recommended.
+# schedule syntax: 5-field cron ("*/30 * * * *", "0 9 * * 1-5"), aliases
+# (@hourly/@daily/@weekly/@monthly/@yearly) or intervals ("every 30m"/"2h"/"1d")

@@ -72,6 +72,11 @@ web_modules/
 config.*
 !/src/**/*/config.ts
 !/src/**/*/config.test.ts
+# tests live in src/tests: the config.* rule above would swallow ours
+!/src/tests/config.test.ts
+
+# generated cloudflared ingress config (agent-managed tunnel routes)
+modules/.tunnel/
 
 # local runtime state (sqlite db + toggle persistence)
 modules/data.sqlite*

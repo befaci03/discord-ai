@@ -1,11 +1,11 @@
 // uses openai
 
-import { OpenAI } from "openai";
-import { ChatCompletion, ChatCompletionMessageParam } from "openai/resources";
-import DB from "../db/struct.js";
-import Agent, { AskOptions, Brain, Provider, Model, ModelType, Tool } from "./struct.js";
-import { Logger } from "../utils/logger.js";
-import { ExternalError } from "../utils/errors.js";
+import { OpenAI } from 'openai';
+import { ChatCompletion, ChatCompletionMessageParam } from 'openai/resources';
+import DB from '../db/struct.js';
+import Agent, { AskOptions, Brain, Provider, Model, ModelType, Tool } from './struct.js';
+import { Logger } from '../utils/logger.js';
+import { ExternalError } from '../utils/errors.js';
 
 export default class extends Brain implements Agent {
 	private prov: OpenAI;
@@ -17,34 +17,28 @@ export default class extends Brain implements Agent {
 		private models: Model[],
 		public sys_prompt: string,
 		tools: Tool[] = [],
-		private maxToolRoundtrips = 4,
-		log?: Logger,
+		private maxToolRoundtrips = 16,
+		log?: Logger
 	) {
 		super(db, tools);
 		this.prov = new OpenAI({ apiKey: api.apiKey, baseURL: api.baseUrl || undefined });
-		this.log = (log ?? new Logger()).child("agent.openai");
+		this.log = (log ?? new Logger()).child('agent.openai');
 	}
 
 	public async ask(prompt: string, system?: string, opts?: AskOptions): Promise<ChatCompletion> {
-		this.setStatus({ busy: true, doing: "thinking" });
+		this.setStatus({ busy: true, doing: 'thinking' });
 		try {
 			// internal calls (agent.generate_*) leave the conversation memory alone
 			const ephemeral = opts?.ephemeral === true;
 			if (!ephemeral) await this.ensureMemory();
 			const model = this.getModel(this.routeModel(prompt, opts?.model));
 			// surface what the agent is doing on the dashboard (talking vs coding)
-			this.setStatus({ busy: true, doing: "thinking", mode: model.type === "coding" ? "coding" : "talking" });
-			const suffix = ephemeral ? "" : await this.contextSuffix(opts?.speakerId);
+			this.setStatus({ busy: true, doing: 'thinking', mode: model.type === 'coding' ? 'coding' : 'talking' });
+			const suffix = ephemeral ? '' : await this.contextSuffix(opts?.speakerId);
 			// identity + brain + tool inventory, then the situational context
 			const base = this.sys_prompt + suffix + this.toolsBlock();
-			const history: ChatCompletionMessageParam[] = ephemeral
-				? []
-				: this.historyMessages().map((t) => ({ role: t.role, content: t.content }) as ChatCompletionMessageParam);
-			const messages: ChatCompletionMessageParam[] = [
-				{ role: "system", content: base + (system ?? "") },
-				...history,
-				{ role: "user", content: prompt },
-			];
+			const history: ChatCompletionMessageParam[] = ephemeral ? [] : this.historyMessages().map((t) => ({ role: t.role, content: t.content }) as ChatCompletionMessageParam);
+			const messages: ChatCompletionMessageParam[] = [{ role: 'system', content: base + (system ?? '') }, ...history, { role: 'user', content: prompt }];
 
 			// tool loop: let the model call our tools, feed results back, repeat
 			// (only tools that are still enabled: toggles apply immediately)
@@ -54,16 +48,20 @@ export default class extends Brain implements Agent {
 				const response = await this.prov.chat.completions.create({
 					messages,
 					model: model.name,
-					tools: callable.length > 0
-						? callable.map((t) => ({
-							type: "function" as const,
-							function: {
-								name: t.name,
-								description: t.description,
-								parameters: t.parameters ?? { type: "object", properties: {}, required: [] },
-							},
-						}))
-						: undefined,
+					// explicit auto: some OpenAI-compatible gateways skip the tool
+					// schema entirely when tool_choice is left out
+					tool_choice: callable.length > 0 ? 'auto' : undefined,
+					tools:
+						callable.length > 0
+							? callable.map((t) => ({
+									type: 'function' as const,
+									function: {
+										name: t.name,
+										description: t.description,
+										parameters: t.parameters ?? { type: 'object', properties: {}, required: [] }
+									}
+								}))
+							: undefined
 				});
 
 				const choice = response.choices[0]?.message;
@@ -72,20 +70,28 @@ export default class extends Brain implements Agent {
 					break;
 				}
 
+				// progress hook (Discord "Executing ..." message): per round, before
+				// the calls run, and never allowed to break the tool loop
+				try {
+					opts?.onToolCall?.(choice.tool_calls.filter((c) => c.type === 'function').map((c) => c.function.name));
+				} catch {
+					/* a broken progress hook must not eat the answer */
+				}
+
 				messages.push(choice);
 				for (const call of choice.tool_calls) {
-					if (call.type !== "function") continue;
+					if (call.type !== 'function') continue;
 					const tool = callable.find((t) => t.name === call.function.name);
 					let content: string;
 					try {
 						if (!tool) throw new Error(`unknown tool ${call.function.name}`);
-						const args = JSON.parse(call.function.arguments || "{}") as Record<string, unknown>;
+						const args = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>;
 						const result = await this.useTool(tool, args);
 						content = this.toolResultText(result);
 					} catch (err) {
 						content = this.toolResultText({ error: err instanceof Error ? err.message : String(err) });
 					}
-					messages.push({ role: "tool", tool_call_id: call.id, content });
+					messages.push({ role: 'tool', tool_call_id: call.id, content });
 				}
 			}
 			// budget exhausted without a text answer: one last call, tools removed,
@@ -98,15 +104,15 @@ export default class extends Brain implements Agent {
 
 			// remember the exchange as a user+assistant pair so history stays alternating
 			if (!ephemeral) {
-				this.rememberTurn("user", prompt);
-				this.rememberTurn("assistant", final.choices[0]?.message?.content ?? "");
+				this.rememberTurn('user', prompt);
+				this.rememberTurn('assistant', final.choices[0]?.message?.content ?? '');
 			}
 			return final;
 		} catch (err) {
-			this.log.error("ask failed:", err instanceof Error ? err.message : err);
-			throw new ExternalError("openai", err);
+			this.log.error('ask failed:', err instanceof Error ? err.message : err);
+			throw new ExternalError('openai', err);
 		} finally {
-			this.setStatus({ busy: false, doing: "nothing much, just looking at messages", mode: "idle" });
+			this.setStatus({ busy: false, doing: 'nothing much, just looking at messages', mode: 'idle' });
 		}
 	}
 
