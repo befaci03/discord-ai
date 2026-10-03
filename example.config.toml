@@ -1,0 +1,154 @@
+[bot]
+token = "${DISCORD_TOKEN}" # or set DISCORD_TOKEN env var
+client_id = "${DISCORD_CLIENT_ID}"
+guild_id = "" # optional: scope slash commands to one guild
+status = "watching the server burn" # presence text
+
+[http]
+# this is used for a private dashboard.. and some endpoints for the agent
+host = "127.0.0.1" # obviously recommended to keep it like that
+port = 3000
+allowed_ips = ["127.0.0.1"] # only allow your ip to access the dashboard
+# prefer the env var (DASHBOARD_PASSCODE), or set passcode directly:
+# passcode = "${DASHBOARD_PASSCODE}"
+passcode_env = "DASHBOARD_PASSCODE" # env var name to read the passcode from
+# login is rate limited to 3 attempts/min/IP with progressive lockout (5min -> 1h)
+
+[database]
+use = "sqlite" # sqlite | postgres | mariadb | mongodb | cassandra
+
+[database.sqlite]
+# where the sqlite file lives (relative to the project root)
+path = "modules/data.sqlite"
+
+[database.mariadb]
+host = "127.0.0.1"
+port = 3306
+username = ""   # set ${DB_USER} etc in the environment
+password = ""
+database = "discord_ai"
+
+[database.postgres]
+host = "127.0.0.1"
+port = 5432
+username = ""   # set ${DB_USER} etc in the environment
+password = ""
+database = "discord_ai"
+
+[database.mongodb]
+# mongodb://user:pass@host:port/db?options
+uri = "mongodb://127.0.0.1:27017"
+database = "discord_ai"
+
+[database.cassandra]
+# comma-separated contact points, e.g. ["127.0.0.1", "127.0.0.2"]
+contact_points = ["127.0.0.1"]
+# the datacenter you are connected to
+local_datacenter = "datacenter1"
+keyspace = "discord_ai"
+
+[docker]
+enabled = false
+host = "unix:///var/run/docker.sock"
+allowed_ports = ["3456-35665"] # what ports can the llm use (ranges "lo-hi" or single)
+max_containers = 100
+default_image = "debian:bookworm"
+# do not put EXACT images, but what you want to disallow #
+#         (this will be provided to the agent)           #
+disallow_images = ["ftp", "ssh", "windows"] # don't put winslop but windows tho lmfao
+
+[logging]
+level = "info" # debug | info | warn | error
+
+[tools]
+directories = ["modules/tools"] # scan these folders for *.tl
+disabled = [] # tool names to skip, e.g. ["run_cmd"]
+
+[skills]
+directories = ["modules/skills"]
+disabled = [] # skill names to skip
+allow_env_access = false # never enable this unless you know why
+
+[agent]
+name = "Agent"
+prompt = "You are a helpful Discord agent." # prepended to the system prompt
+
+[agent.toolang]
+# TooLang interpreter limits (clamped at runtime, these are the ceilings)
+max_loop_iterations = 10000
+max_call_depth = 64
+max_steps = 200000
+max_output_length = 100000
+tool_timeout_ms = 30000
+allow_tool_creation = true
+allow_skill_creation = false
+
+[agent.toolang.http]
+block_private = true # refuse localhost/private ranges (SSRF protection)
+allowed_hosts = [] # empty = allow all, e.g. ["api.github.com", "*.example.com"]
+blocked_hosts = [] # priority over allowlist
+allowed_methods = [] # empty = all of GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS
+max_response_bytes = 20000000
+timeout_ms = 20000
+
+[agent.toolang.fs]
+# sandboxed filesystem for the `fs` module: everything is jailed inside root
+root = "./sandbox"
+max_file_size = 5000000 # bytes
+allow_write = true # reads only when false
+
+[agent.toolang.node]
+# `node.child_proc.run` policy
+enabled = false # master switch
+timeout_ms = 30000
+allowed_commands = [] # empty = all except denied
+# denied_commands defaults to sudo/su/dd/curl/wget/nc/ssh/etc when empty
+
+[agent.providers]
+# 1 is OpenAI-compatible, 0 is Anthropic-compatible
+openai = { api_type = 1, base_url = "https://api.openai.com/v1", api_key = "${OPENAI_API_KEY}" }
+anthropic = { api_type = 0, base_url = "https://api.anthropic.com", api_key = "${ANTHROPIC_API_KEY}" }
+gemini = { api_type = 1, base_url = "https://generativelanguage.googleapis.com/v1beta/openai", api_key = "${GEMINI_API_KEY}" }
+
+[agent.models]
+use_same_models = true # will always use the default model
+default_model = { provider = "openai", model = "gpt-4o-mini" }
+# if false, will use the default
+coding_model = [{ enabled = true, provider = "openai", model = "gpt-4o-mini" }]
+# if false/enabled=false, any x features won't be available
+image_model = [{ enabled = false, provider = "gemini", model = "nano-banana" }]  # Image Generation
+video_model = [{ enabled = false, provider = "gemini", model = "little-banana" }] # Video Generation
+tts_model = [{ enabled = false, provider = "openai", model = "tts-1" }]          # Text-to-Speech
+stt_model = [{ enabled = false, provider = "openai", model = "stt-1" }]          # Speech-to-Text
+rerank_model = [{ enabled = false, provider = "openai", model = "" }]            # Reranker
+
+# ------------------------------------------------------------------
+# Addons: give the AGENT extra capabilities (LLM-callable functions)
+# ------------------------------------------------------------------
+# addons.enabled is the ONLY thing that loads an addon. A slug that is not
+# in this list is ignored at startup, even when an [addons.<slug>] section
+# with settings exists below. To disable an addon, remove it from the list.
+# (use the [addons] header below, NOT "addons.enabled = ..." dotted form:
+#  after a table header like [agent.models] a dotted key lands in that table)
+[addons]
+enabled = ["weather"] # e.g. ["github", "weather", "tunnel"]
+
+# per-addon settings (all optional, secrets should be env vars)
+# having this section does NOT enable github; only addons.enabled does
+[addons.github]
+# token = "ghp_xxx"
+default_owner = "" # so the agent can say repo "myrepo" instead of "me/myrepo"
+allowed_repos = [] # empty = agent can touch ANY repo the token allows.
+
+[addons.tunnel]
+# publishes the dashboard (or another local service) through a Cloudflare
+# Tunnel: cloudflared creates a public HTTPS route, no open firewall port.
+# requires the `cloudflared` binary: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
+mode = "quick" # quick = ephemeral https://xxx.trycloudflare.com route (no account) | named = your own hostname
+binary = "cloudflared" # full path if it is not on PATH
+service = "" # "" = the dashboard (http://<http.host>:<http.port>), or e.g. "http://127.0.0.1:8080"
+# named mode only: keep the token in the environment, never in this file
+# token = "${CF_TUNNEL_TOKEN}"
+hostname = "" # named mode only: your public hostname, e.g. "dash.example.com" (created in the CF dashboard)
+# note: published dashboard traffic arrives from localhost, so allowed_ips in
+# [http] stops being a network barrier - the passcode is the real barrier.

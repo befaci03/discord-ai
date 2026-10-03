@@ -1,0 +1,44 @@
+{
+  "name": "discord-ai",
+  "version": "0.1.0",
+  "description": "An Agent in a Discord server... (simple as that)",
+  "private": true,
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "npx tsc",
+    "test": "jest",
+    "lint": "eslint src/**/*.ts",
+    "format": "prettier --write src/**/*.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.120.0",
+    "bcrypt": "^6.0.0",
+    "better-sqlite3": "^13.0.3",
+    "cassandra-driver": "^4.10.0",
+    "discord.js": "^14.27.0",
+    "docker-compose": "^1.4.2",
+    "is-docker": "^4.0.0",
+    "mariadb": "^3.5.4",
+    "mongodb": "^7.7.0",
+    "openai": "^7.5.0",
+    "pg": "^8.23.1",
+    "toml": "^5.0.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^8.0.6",
+    "@babel/plugin-transform-modules-commonjs": "^8.0.1",
+    "@babel/preset-typescript": "^8.0.1",
+    "@types/bcrypt": "^6.0.0",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^26.1.2",
+    "@types/pg": "^8.23.1",
+    "babel-jest": "^30.5.2",
+    "dotenv": "^18.0.5",
+    "jest": "^30.5.2",
+    "prettier": "^3.9.6",
+    "prettier-plugin-toml": "^2.0.6",
+    "typescript": "^7.0.2"
+  }
+}

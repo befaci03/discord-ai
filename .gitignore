@@ -69,6 +69,12 @@ web_modules/
 .env
 .env.*
 !.env.example
+config.*
+!/src/**/*/config.ts
+
+# local runtime state (sqlite db + toggle persistence)
+modules/data.sqlite*
+*.sqlite*
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache

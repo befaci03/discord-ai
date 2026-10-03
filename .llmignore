@@ -1,0 +1,10 @@
+# list of disallowed files you should not read/edit
+# list of disallowed commands you should not execute
+
+--read
+config.toml
+.env
+--write
+config.toml
+.env
+--execute

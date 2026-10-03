@@ -1,0 +1,20 @@
+{
+ "include": [
+  "src/**/*",
+  "modules/addons/*.ts"
+ ],
+ "compilerOptions": {
+  "target": "ES2022",
+  "module": "NodeNext",
+  "moduleResolution": "nodenext",
+  "types": [
+   "node",
+   "jest"
+  ],
+  "allowSyntheticDefaultImports": true,
+  "strict": true,
+  "resolveJsonModule": true,
+  "skipLibCheck": true,
+  "noEmit": true
+ }
+}
