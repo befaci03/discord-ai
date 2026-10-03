@@ -48,14 +48,14 @@ local_datacenter = "datacenter1"
 keyspace = "discord_ai"
 
 [docker]
-enabled = false
+enabled = false # master switch, also gates the docker_* tools the agent sees
 host = "unix:///var/run/docker.sock"
 allowed_ports = ["3456-35665"] # what ports can the llm use (ranges "lo-hi" or single)
 max_containers = 100
 default_image = "debian:bookworm"
 # do not put EXACT images, but what you want to disallow #
 #         (this will be provided to the agent)           #
-disallow_images = ["ftp", "ssh", "windows"] # don't put winslop but windows tho lmfao
+disallowed_images = ["ftp", "ssh", "windows"] # don't put winslop but windows tho lmfao
 
 [logging]
 level = "info" # debug | info | warn | error
@@ -72,6 +72,23 @@ allow_env_access = false # never enable this unless you know why
 [agent]
 name = "Agent"
 prompt = "You are a helpful Discord agent." # prepended to the system prompt
+# optional: .prompt.txt in the project root is appended right after the prompt
+# (max 8000 chars). Handy for "how the agent talks" without touching config.
+
+[agent.brain]
+# the agent's brain: rolling conversation memory + what it starts out liking.
+# lists below are only the STARTING point, the agent keeps its own changes
+# across restarts (it edits them with brain_set_preference).
+memory = 30 # remembered conversation turns (0 = no memory, clamped to 0..200)
+reset = false # true = forget saved brain state at boot and re-seed from here
+likes = [] # e.g. ["rust", "quiet servers"]
+dislikes = [] # e.g. ["php", "crypto ads"]
+favorites = [] # e.g. ["shell scripting"]
+pending = [] # what it wants to get better at, e.g. ["learn japanese"]
+
+# people the agent should already know (key = numeric Discord user id)
+[agent.brain.people]
+# "123456789012345678" = { description = "server owner", likes = ["football"], personalities = ["loud"] }
 
 [agent.toolang]
 # TooLang interpreter limits (clamped at runtime, these are the ceilings)

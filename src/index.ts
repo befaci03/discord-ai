@@ -7,13 +7,14 @@ import SQLiteDB from "./db/sqlite.js";
 import { ToolRegistry } from "./modules/tools.js";
 import { SkillRegistry } from "./modules/skills.js";
 import { AddonRegistry } from "./modules/addons.js";
-import { buildAgent, addonFunctionsToTools } from "./agent/factory.js";
+import { buildAgent, addonFunctionsToTools, registryToAgentTools } from "./agent/factory.js";
 import { startDashboard } from "./dashboard/server.js";
 import { hashPasscode, SessionStore, LoginLimiter } from "./dashboard/auth.js";
 import { LiveBus } from "./dashboard/live.js";
 import { createDB } from "./db/index.js";
 import { ToolRunRow, AuditRow } from "./db/struct.js";
 import { startBot } from "./bot.js";
+import { ToolContext } from "./modules/types.js";
 // .env is loaded natively by Bun (shell env still wins over the file)
 
 async function main(): Promise<void> {
@@ -114,6 +115,13 @@ async function main(): Promise<void> {
 	await startDashboard(deps, config, dashLog, auth, live);
 
 	// ----- agent + bot -----
+	// one shared tool context: the discord client is filled in by startBot(),
+	// so `!tool` runs and the agent's own tool calls hit the same sandbox
+	const toolCtx: ToolContext = {
+		config,
+		log: (level, msg) => log[level](msg),
+	};
+
 	// the tool list is built once, so the invoker re-checks addon state at
 	// call time: a runtime-disabled addon is refused immediately
 	const agentTools = addonFunctionsToTools(
@@ -123,10 +131,12 @@ async function main(): Promise<void> {
 		},
 		(fnName) => addons.functionEnabled(fnName),
 	);
+	// enabled .tl tools are callable by the model too (registry re-checks toggles)
+	agentTools.push(...registryToAgentTools(tools, toolCtx, db));
+	const agent = buildAgent(db, config, agentTools, log); // appends the brain tools
 	log.info(`agent functions: ${agentTools.map((t) => t.name).join(", ") || "(none)"}`);
-	const agent = buildAgent(db, config, agentTools, log);
 
-	const client = await startBot({ config, db, tools, skills, addons, log, agent, live });
+	const client = await startBot({ config, db, tools, skills, addons, log, agent, live, toolCtx });
 	void client;
 
 	// graceful shutdown: close the database cleanly on SIGINT/SIGTERM

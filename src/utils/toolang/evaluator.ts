@@ -456,6 +456,7 @@ export class Evaluator {
 			const raw = (typeof cfg.docker === "object" && cfg.docker !== null ? cfg.docker : {}) as Record<string, unknown>;
 			return {
 				enabled: raw.enabled === true,
+				host: typeof raw.host === "string" ? raw.host : undefined,
 				allowedPorts: Array.isArray(raw.allowedPorts) ? raw.allowedPorts.map(String) : undefined,
 				disallowedImages: Array.isArray(raw.disallowedImages) ? raw.disallowedImages.map(String) : undefined,
 				allowedImages: Array.isArray(raw.allowedImages) ? raw.allowedImages.map(String) : undefined,

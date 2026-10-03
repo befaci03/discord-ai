@@ -6,9 +6,14 @@ import DB from "../db/struct.js";
 import Agent, { Model, ModelType, Provider, Tool } from "./struct.js";
 import OpenAIAgent from "./openai.js";
 import AnthropicAgent from "./anthropic.js";
+import { brainTools } from "./brainfns.js";
 import { AppConfig } from "../utils/config.js";
 import { Logger } from "../utils/logger.js";
-import { AgentFunction } from "../modules/types.js";
+import { AgentFunction, ToolContext } from "../modules/types.js";
+import { ToolRegistry, runTool } from "../modules/tools.js";
+import { ToolDef } from "../utils/llmproto/types.js";
+import { existsSync, readFileSync } from "node:fs";
+import * as path from "node:path";
 
 /**
  * Wrap addon capabilities as LLM-callable tools.
@@ -39,6 +44,97 @@ function providerUsable(providers: AppConfig["agent"]["providers"], name: string
 	if (!name) return false;
 	const pcfg = providers[name];
 	return !!pcfg?.api_key && !pcfg.api_key.startsWith("${");
+}
+
+/**
+ * Can chat actually run? Mirrors buildAgent's startup checks so the dashboard
+ * reports the truth instead of "configured" for an empty providers table.
+ */
+export function llmAvailable(config: AppConfig): boolean {
+	const modelsCfg = config.agent.models;
+	if (!modelsCfg?.default_model?.provider) return false;
+	if (!String(modelsCfg.default_model.model ?? "").trim()) return false;
+	return providerUsable(config.agent.providers, modelsCfg.default_model.provider);
+}
+
+/** Cap for the optional .prompt.txt persona, so a stray file can't bloat every request. */
+const PROMPT_FILE_CAP = 8000;
+
+/**
+ * Optional extra persona in .prompt.txt (project root). Added on top of
+ * [agent].prompt: think of it as "how you talk", config as "what you are".
+ */
+function loadPromptFile(log: Logger): string {
+	const file = path.join(process.cwd(), ".prompt.txt");
+	try {
+		if (!existsSync(file)) return "";
+		const text = readFileSync(file, "utf-8").trim();
+		if (text.length === 0) return "";
+		if (text.length > PROMPT_FILE_CAP) log.warn(`.prompt.txt is ${text.length} chars, truncated to ${PROMPT_FILE_CAP}`);
+		return text.slice(0, PROMPT_FILE_CAP);
+	} catch (err) {
+		log.warn(`could not read .prompt.txt: ${(err as Error).message}`);
+		return "";
+	}
+}
+
+/** Header args (string/number/boolean + disallow list) -> JSON schema. */
+function argsToSchema(args: ToolDef["arguments"]): Record<string, unknown> {
+	const properties: Record<string, unknown> = {};
+	const required: string[] = [];
+	for (const a of args) {
+		const prop: Record<string, unknown> = { type: a.type, description: a.description };
+		if (a.disallow && a.disallow.length > 0) {
+			prop.description = `${a.description} (refused values: ${a.disallow.join(", ")})`;
+		}
+		properties[a.name] = prop;
+		required.push(a.name); // the .tl validator requires every header arg
+	}
+	return { type: "object", properties, required };
+}
+
+/**
+ * Expose the enabled TooLang tools to the LLM. The registry re-checks the
+ * enabled flag at call time (runTool), so a dashboard toggle or a config
+ * disable takes effect on the very next call. Every run is recorded like the
+ * `!toolname` path does, with `agent` as the actor.
+ *
+ * docker tools are dropped while `[docker].enabled = false`: offering four
+ * tools that can only answer "docker is disabled" is noise, the config page
+ * and the docs already say docker is off.
+ */
+export function registryToAgentTools(registry: ToolRegistry, ctx: ToolContext, db: DB): Tool[] {
+	const dockerEnabled = ctx.config.docker.enabled === true;
+	return registry
+		.enabledAll()
+		.filter((t) => dockerEnabled || !t.name.startsWith("docker_"))
+		.map((t) => ({
+		name: t.name,
+		description: t.description,
+		parameters: argsToSchema(t.header.arguments),
+		invoker: async (args: Record<string, unknown>) => {
+			const started = Date.now();
+			try {
+				const result = await runTool(registry, t.name, args, ctx);
+				await record(db, t.name, 1, "", Date.now() - started, "tool.run");
+				return result;
+			} catch (err) {
+				// bookkeeping must never mask the real tool error
+				await record(db, t.name, 0, err instanceof Error ? err.message : "unknown", Date.now() - started, "tool.fail");
+				throw err;
+			}
+		},
+		}));
+}
+
+/** Persist one tool run + an audit entry; swallows DB hiccups on purpose. */
+async function record(db: DB, tool: string, success: 0 | 1, error: string, durationMs: number, action: "tool.run" | "tool.fail"): Promise<void> {
+	try {
+		await db.recordToolRun({ tool, caller_id: "agent", success, error: error.slice(0, 200), duration_ms: durationMs });
+		await db.audit({ actor_id: "agent", action, target: tool, details: "{}" });
+	} catch {
+		/* metrics only: never break the tool call over a failed write */
+	}
 }
 
 const MODEL_TYPE_KEYS: { key: string; type: ModelType }[] = [
@@ -103,10 +199,18 @@ export function buildAgent(db: DB, config: AppConfig, tools: Tool[], log: Logger
 	const missing = MODEL_TYPE_KEYS.map((m) => m.type).filter((t) => !models.some((m) => m.type === t));
 	if (missing.length > 0) log.info(`model types without a dedicated model (fall back to '${modelName}'): ${missing.join(", ")}`);
 
-	const sysPrompt = `${config.agent.prompt}\nYour name is ${config.agent.name}.`;
 	const log2 = log.child("agent");
-	if (provider.apiType === 0) {
-		return new AnthropicAgent(db, provider, models, sysPrompt, tools, 4, log2);
-	}
-	return new OpenAIAgent(db, provider, models, sysPrompt, tools, 4, log2);
+	const extraPersona = loadPromptFile(log2);
+	const sysPrompt = `${config.agent.prompt}${extraPersona ? `\n${extraPersona}` : ""}\nYour name is ${config.agent.name}.`;
+	const agent = provider.apiType === 0
+		? new AnthropicAgent(db, provider, models, sysPrompt, tools, 4, log2)
+		: new OpenAIAgent(db, provider, models, sysPrompt, tools, 4, log2);
+	// the brain reads its shape from [agent.brain]: memory window, seed tastes,
+	// seeded people profiles, and the one-shot reset flag
+	agent.maxMemory = config.agent.brain.memory;
+	agent.seed = config.agent.brain;
+	agent.reseed = config.agent.brain.reset;
+	// personality tools belong to this instance: bind them now that it exists
+	tools.push(...brainTools(agent));
+	return agent;
 }

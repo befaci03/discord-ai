@@ -1,7 +1,7 @@
 // Discord bot bootstrap: wires config, DB, tool/skill registries, the agent
 // and the addon modules together.
 
-import { Client, Events, GatewayIntentBits, Message, Partials } from "discord.js";
+import { Client, Events, GatewayIntentBits, Message, Partials, type MessageMentionTypes } from "discord.js";
 import { AppConfig } from "./utils/config.js";
 import { Logger } from "./utils/logger.js";
 import { UserError, toUserMessage } from "./utils/errors.js";
@@ -22,6 +22,8 @@ export interface BotDeps {
 	log: Logger;
 	agent: Agent | null;
 	live?: LiveBus;
+	/** shared tool context, reused by the agent's own tool calls (index.ts builds it) */
+	toolCtx: ToolContext;
 }
 
 export function createClient(): Client {
@@ -36,12 +38,48 @@ export function createClient(): Client {
 	});
 }
 
-export async function startBot(deps: BotDeps): Promise<Client> {
-	const { config, db, tools, skills, addons, log, agent, live } = deps;
-	const client = createClient();
+/** Permissions worth telling the model about (it decides what it may do). */
+const TRACKED_PERMS = [
+	"Administrator",
+	"ManageGuild",
+	"ManageChannels",
+	"ManageRoles",
+	"ManageMessages",
+	"ModerateMembers",
+	"KickMembers",
+	"BanMembers",
+	"SendMessages",
+	"SendMessagesInThreads",
+	"EmbedLinks",
+	"AttachFiles",
+	"ReadMessageHistory",
+	"MentionEveryone",
+	"Connect",
+	"Speak",
+	"UseExternalEmojis",
+] as const;
 
-	// expose addon modules to the agent too
-	const addonVars = addons.extraVars();
+/** Model output must never ping anyone: no @everyone/@here/roles/users. */
+const NO_PINGS = { parse: [] as MessageMentionTypes[] };
+
+/** Subset reported for the human you are talking to: changes how you reply. */
+const ELEVATED_PERMS = [
+	"Administrator",
+	"ManageGuild",
+	"ManageChannels",
+	"ManageRoles",
+	"ManageMessages",
+	"ModerateMembers",
+	"KickMembers",
+	"BanMembers",
+] as const;
+
+export async function startBot(deps: BotDeps): Promise<Client> {
+	const { config, db, tools, skills, addons, log, agent, live, toolCtx } = deps;
+	const client = createClient();
+	// the shared context is what the LLM's tool calls run with: bind the client
+	toolCtx.discord = client;
+	toolCtx.agent = agent ?? undefined;
 
 	client.once(Events.ClientReady, (c) => {
 		log.info(`logged in as ${c.user.tag} | tools: ${tools.count()} | skills: ${skills.count()} | addons: ${addons.count()} | llm: ${agent ? "on" : "off"}`);
@@ -64,12 +102,7 @@ export async function startBot(deps: BotDeps): Promise<Client> {
 
 			await db.upsertUser({ id: message.author.id, username: message.author.username });
 
-			const ctx: ToolContext = {
-				discord: client,
-				agent: agent ?? undefined,
-				config,
-				log: (level, msg) => log[level](msg),
-			};
+			const ctx = toolCtx; // one sandbox for `!tool` and for the model's tool calls
 
 			// explicit tool invocation syntax: !toolname key=value
 			const toolMatch = /^!(\w+)(?:\s+(.*))?$/.exec(content);
@@ -82,36 +115,78 @@ export async function startBot(deps: BotDeps): Promise<Client> {
 					await db.audit({ actor_id: message.author.id, action: "tool.run", target: toolName, details: "{}" });
 					await db.recordToolRun({ tool: toolName, caller_id: message.author.id, success: 1, error: "", duration_ms: Date.now() - started });
 					const text = typeof result === "string" ? result : "```json\n" + JSON.stringify(result, null, 2).slice(0, 1800) + "\n```";
-					await message.reply(text.slice(0, 2000));
+					await message.reply({ content: text.slice(0, 2000), allowedMentions: NO_PINGS });
 				} catch (err) {
 					await db.recordToolRun({ tool: toolName, caller_id: message.author.id, success: 0, error: err instanceof Error ? err.message.slice(0, 200) : "unknown", duration_ms: Date.now() - started });
 					await db.audit({ actor_id: message.author.id, action: "tool.fail", target: toolName, details: "{}" });
-					await message.reply(`tool error: ${toUserMessage(err)}`.slice(0, 2000));
+					await message.reply({ content: `tool error: ${toUserMessage(err)}`.slice(0, 2000), allowedMentions: NO_PINGS });
 				}
 				return;
 			}
 
 			// LLM conversation with matched skills as extra system context
 			if (!agent) {
-				await message.reply("no LLM provider configured. Set [agent.providers] + [agent.models] in config.toml (and the API key env var).");
+				await message.reply({ content: "no LLM provider configured. Set [agent.providers] + [agent.models] in config.toml (and the API key env var).", allowedMentions: NO_PINGS });
 				return;
 			}
 			const skillPrompt = skills.promptFor(content);
-			const completion = await agent.ask(content, skillPrompt);
+			// skills first, then who is talking + what the bot may actually do here
+			const system = [skillPrompt, discordContext(message)].filter((s) => s.trim().length > 0).join("\n");
+			const completion = await agent.ask(content, system, { speakerId: message.author.id });
 			const reply = completion.choices[0]?.message?.content ?? "";
 			if (typeof reply === "string" && reply.length > 0) {
+				await message.reply({ content: reply.slice(0, 2000), allowedMentions: NO_PINGS });
 				await db.audit({ actor_id: message.author.id, action: "agent.reply", target: "chat", details: "{}" });
-				await message.reply(reply.slice(0, 2000));
+				// persisted so memory survives a restart (Brain.bootstraps from this)
+				await db.recordChat({
+					author_id: message.author.id,
+					username: message.author.username,
+					guild_id: message.guildId ?? "",
+					content,
+					response: reply,
+				});
 			}
-			void addonVars;
 		} catch (err) {
 			log.error("message handler failed:", err instanceof Error ? err.stack : err);
-			try { await message.reply(toUserMessage(err)); } catch { /* channel gone, whatever */ }
+			try { await message.reply({ content: toUserMessage(err), allowedMentions: NO_PINGS }); } catch { /* channel gone, whatever */ }
 		}
 	});
 
 	await client.login(config.bot.token);
 	return client;
+}
+
+/**
+ * Per-ask context: who is talking, and what the bot may actually do here.
+ * The model has no other way to introspect Discord permissions, so it used to
+ * happily promise kicks and embeds it cannot send.
+ */
+export function discordContext(message: Message): string {
+	const lines: string[] = [];
+	const ch = message.channel as { name?: string; permissionsFor?: (member: unknown) => { toArray(): string[] } | null };
+	const where = ch.name ? `#${ch.name}` : "direct messages";
+	const whereIn = message.guild ? `${where} of server '${message.guild.name}'` : where;
+	lines.push(`You are talking to ${message.author.displayName} (@${message.author.username}, id ${message.author.id}) in ${whereIn}.`);
+
+	// what the bot itself may do in this channel
+	const me = message.guild?.members.me;
+	const botPerms = me && typeof ch.permissionsFor === "function" ? ch.permissionsFor(me)?.toArray() ?? [] : null;
+	if (botPerms) {
+		const have = TRACKED_PERMS.filter((p) => botPerms.includes(p));
+		const missing = TRACKED_PERMS.filter((p) => !botPerms.includes(p));
+		lines.push(`Your permissions here: ${have.join(", ") || "none"}. Missing: ${missing.join(", ") || "none"}.`);
+		lines.push("Only act within the permissions you have; if one is missing, say so instead of trying.");
+	}
+
+	// who you are talking to: roles + the elevated rights that change how you reply
+	if (message.member) {
+		const roles = message.member.roles.cache.map((r) => r.name).filter((n) => n !== "@everyone").slice(0, 10);
+		if (roles.length > 0) lines.push(`Their roles: ${roles.join(", ")}.`);
+		const speakerPerms = typeof ch.permissionsFor === "function" ? ch.permissionsFor(message.member)?.toArray() ?? [] : [];
+		const elevated = ELEVATED_PERMS.filter((p) => speakerPerms.includes(p));
+		if (elevated.length > 0) lines.push(`They hold elevated permissions: ${elevated.join(", ")} (treat them accordingly).`);
+	}
+	return lines.join("\n");
 }
 
 /** Parse `key=value other="quoted value"` style args. */

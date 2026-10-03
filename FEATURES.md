@@ -37,7 +37,7 @@ has a JSON tool header, then a `¤` delimiter, then the program body.
 | `node` | `child_proc.run` with command denylist/allowlist and no shell, bcrypt helpers |
 | `Array` | slice, push, length, range, repeat |
 | `Object` | keys/values/entries/fromEntries/merge/freeze |
-| `docker` | container lifecycle behind image/port allowlists and name validation (config-gated, honors docker.host) |
+| `docker` | container lifecycle behind image/port allowlists and name validation, plus `docker.list()` (name/image/status of every container). Every op is refused unless `[docker].enabled = true`, honors `docker.host` and `max_containers` |
 | `discord` | messages, embeds, reactions, polls, channels, roles, members, events (needs a client) |
 | `agent` | text/image/audio/video generation, transcription (needs an agent) |
 | `sys` | read-only host info (hostname, mem, cpus); env lookups by exact name only |
@@ -53,7 +53,15 @@ Methods on values: strings (30+), numbers (14), arrays (20+), objects (9).
 - audit log + per-tool run stats in SQLite
 - runtime guard: unknown tools, invalid args, timeouts and errors are all
   reported without leaking internals
-- premade tools: `web_search`, `fetch_json`, `server_stats`, `sandbox_write`
+- premade tools: `web_search`, `fetch_json`, `server_stats`, `sandbox_write`,
+  and the docker family `docker_list`, `docker_exec`, `docker_create`,
+  `docker_manage` (all no-ops unless `[docker].enabled = true`)
+- every enabled tool is ALSO offered to the model as a function: header
+  arguments become the JSON schema (all required, `disallow` values surfaced
+  in the description). The registry re-checks the enabled flag at call time,
+  so a dashboard toggle hides a tool from the model and refuses the very next
+  call. Each model-driven run is recorded like the `!tool` path, with `agent`
+  as the actor
 
 ## Skill system (`modules/skills/*.md` + `src/modules/skills.ts`)
 
@@ -140,14 +148,37 @@ authentication and live updates:
   broken provider entry are skipped with a warning instead of failing at
   call time
 - addon capabilities are injected as LLM functions with their schemas
-- matched skills inject instructions into the system prompt
+- enabled `.tl` tools are injected the same way (see the tool system above)
+- agent brain (`[agent.brain]`): rolling conversation memory (default 30
+  turns, clamped to 0..200, bootstrapped from the saved chat history so it
+  survives restarts), seed tastes (`likes`/`dislikes`/`favorites`/`pending`)
+  and seeded people profiles. The seed applies while nothing is saved yet;
+  `reset = true` wipes the saved state once so config takes over again. The
+  model edits its own tastes with `brain_set_preference` and keeps profiles
+  with `brain_remember_person` / `brain_get_person`
+- `.prompt.txt` (project root) is appended to `[agent].prompt`, capped at
+  8000 chars: the place for "how the agent talks"
+- model routing heuristic: prompts that look like code (fences, `fn`/`def`/
+  `function`, `console.log`, ...) go to the `coding` model, an explicit
+  `model` option always wins, internal `agent.generate_*` calls are ephemeral
+  (they never touch the conversation memory) and force their own model type
+- per-ask system context: matched skills, then who is talking (display name,
+  id, channel, server, their roles and elevated permissions) and what the bot
+  itself may do in that channel (granted + missing permissions, with an
+  instruction not to promise what it cannot do)
 - `bot.guild_id` scopes the bot to a single guild when set
 
 ## Configuration (`config.toml`, see `example.config.toml`)
 
 - every key has a default; missing config file bootstraps from the example
 - `${ENV_VAR}` expansion for secrets (tokens, API keys)
-- per-section policies: http, fs, node, docker
+- snake_case keys in the file map onto their camelCase setting when that is
+  how the code spells it (`allowed_ips` -> `allowedIps`, `max_loop_iterations`
+  -> `maxLoopIterations`); keys that are snake in code (`passcode_env`,
+  `guild_id`, `use_same_models`) keep their name
+- per-section policies: http, fs, node, docker (the top level `[docker]` is
+  the single docker config)
+- `[agent.brain]`: memory window, seed tastes/people, one-shot reset
 - interpreter limits, tool/skill directories and disable lists
 - logging level + optional log file (`logging.file`), bot presence, model/
   provider routing (openai-compatible or anthropic-compatible base URLs)
@@ -157,8 +188,16 @@ authentication and live updates:
 
 - Discord gateway with mention handling and input length limits
 - explicit tool invocation from chat: `!toolname key=value key2="quoted value"`
+- every successful exchange is written to the chat table and pulled back into
+  memory on the next boot (size-capped rows)
+- the agent is told its permissions per channel, plus the speaker's identity,
+  roles and elevated permissions, on every ask
+- replies are sent with `allowedMentions: { parse: [] }`: model output can
+  never ping `@everyone`, `@here`, roles or users (mention abuse)
 - OpenAI-compatible and Anthropic-compatible agents implementing the same
-  interface, with a tool round-trip loop
+  interface, both with a tool round-trip loop (Anthropic feeds `tool_use`
+  blocks back as `tool_result`s, and drops tools on the last round so the
+  model is forced to answer in text)
 - SQLite storage (WAL mode, default file `modules/data.sqlite`): users, audit
   trail, tool run stats, a namespaced key-value store, and chat history
   (user message + agent reply, size-capped). Audit and tool-run tables can
@@ -172,3 +211,6 @@ authentication and live updates:
 - secrets from env, redacted in logs
 - audit logging of tool runs and security-relevant mutations
 - all interpreter limits uncatchable by tool scripts
+- docker: every operation funnels through one gate that refuses to run while
+  `[docker].enabled` is false, images go through the allow/deny lists before
+  they reach the CLI, ports are range-checked and `max_containers` is enforced

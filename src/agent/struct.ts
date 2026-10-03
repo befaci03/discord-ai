@@ -1,20 +1,21 @@
+// Shared agent contract: what an Agent is, which tools/models it speaks about,
+// and the Discord-shaped data it works with. The Brain (memory, tastes, people,
+// model routing) lives in ./brain.js and is re-exported here, so existing
+// `import { Brain } from "./struct.js"` callers keep working.
+
 import { type Presence, type Role, type VoiceState, type PresenceStatus } from "discord.js";
-import DB from "../db/struct.js";
 import { ChatCompletion } from "openai/resources.mjs";
 
-type HistoryType = (Message | string)[]; // message or task
-export class Brain {
-	history: HistoryType = [];
-	queue: Map<number, Message> = new Map(); // number is priority level
-	lookingAt: Message | null = null;
-	// data
-	trust_factors: Map<string, number> = new Map(); // string is UID, number is between -3 and 2000
-	dislikes: string[] = [];
-	likes: string[] = [];
-	favorites: string[] = []; // e.g. favorite prog lang, guy, etc.
-	pending: string[] = []; // e.g. i need to improve the tic-tac-toe
+export { Brain, MEMORY_DEFAULT, looksLikeCode } from "./brain.js";
+export type { BrainSeed, ChatTurn, PersonSeed } from "./brain.js";
 
-	constructor(db: DB) {}
+export interface AskOptions {
+	/** force a model type; when omitted, code-ish prompts route to the coding model */
+	model?: ModelType;
+	/** true = internal call (e.g. agent.generate_text): leave conversation memory alone */
+	ephemeral?: boolean;
+	/** numeric Discord id of the speaker: their saved profile is injected into the system prompt */
+	speakerId?: string;
 }
 
 export interface Provider {
@@ -45,7 +46,7 @@ export interface ToolCallResult {
 export default interface Agent {
 	status: AgentStatus;
 
-	ask(prompt: string, system?: string): Promise<ChatCompletion>;
+	ask(prompt: string, system?: string, opts?: AskOptions): Promise<ChatCompletion>;
 	useTool(tool: Tool, args: unknown): Promise<unknown>;
 	getModel(type: ModelType): Model;
 }

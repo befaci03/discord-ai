@@ -3,7 +3,7 @@
 import { OpenAI } from "openai";
 import { ChatCompletion, ChatCompletionMessageParam } from "openai/resources";
 import DB from "../db/struct.js";
-import Agent, { Brain, AgentStatus, Provider, Model, ModelType, Tool } from "./struct.js";
+import Agent, { AskOptions, Brain, AgentStatus, Provider, Model, ModelType, Tool } from "./struct.js";
 import { Logger } from "../utils/logger.js";
 import { ExternalError } from "../utils/errors.js";
 
@@ -27,19 +27,31 @@ export default class extends Brain implements Agent {
 		this.log = (log ?? new Logger()).child("agent.openai");
 	}
 
-	public async ask(prompt: string, system?: string): Promise<ChatCompletion> {
+	public async ask(prompt: string, system?: string, opts?: AskOptions): Promise<ChatCompletion> {
 		this.status = { ...this.status, busy: true, doing: "thinking" };
 		try {
+			// internal calls (agent.generate_*) leave the conversation memory alone
+			const ephemeral = opts?.ephemeral === true;
+			if (!ephemeral) await this.ensureMemory();
+			const model = this.getModel(this.routeModel(prompt, opts?.model));
+			// surface what the agent is doing on the dashboard (talking vs coding)
+			this.status = { ...this.status, busy: true, doing: "thinking", mode: model.type === "coding" ? "coding" : "talking" };
+			const suffix = ephemeral ? "" : await this.contextSuffix(opts?.speakerId);
+			const history: ChatCompletionMessageParam[] = ephemeral
+				? []
+				: this.historyMessages().map((t) => ({ role: t.role, content: t.content }) as ChatCompletionMessageParam);
 			const messages: ChatCompletionMessageParam[] = [
-				{ role: "system", content: this.sys_prompt + (system ?? "") },
+				{ role: "system", content: this.sys_prompt + suffix + (system ?? "") },
+				...history,
 				{ role: "user", content: prompt },
 			];
 
 			// tool loop: let the model call our tools, feed results back, repeat
+			let final: ChatCompletion | null = null;
 			for (let round = 0; round <= this.maxToolRoundtrips; round++) {
 				const response = await this.prov.chat.completions.create({
 					messages,
-					model: this.models[0].name,
+					model: model.name,
 					tools: this.tools.length > 0
 						? this.tools.map((t) => ({
 							type: "function" as const,
@@ -53,7 +65,10 @@ export default class extends Brain implements Agent {
 				});
 
 				const choice = response.choices[0]?.message;
-				if (!choice?.tool_calls || choice.tool_calls.length === 0) return response;
+				if (!choice?.tool_calls || choice.tool_calls.length === 0) {
+					final = response;
+					break;
+				}
 
 				messages.push(choice);
 				for (const call of choice.tool_calls) {
@@ -72,12 +87,19 @@ export default class extends Brain implements Agent {
 				}
 			}
 			// budget exhausted: final answer without tools
-			return await this.prov.chat.completions.create({ messages, model: this.models[0].name });
+			final = await this.prov.chat.completions.create({ messages, model: model.name });
+
+			// remember the exchange as a user+assistant pair so history stays alternating
+			if (!ephemeral) {
+				this.rememberTurn("user", prompt);
+				this.rememberTurn("assistant", final.choices[0]?.message?.content ?? "");
+			}
+			return final;
 		} catch (err) {
 			this.log.error("ask failed:", err instanceof Error ? err.message : err);
 			throw new ExternalError("openai", err);
 		} finally {
-			this.status = { busy: false, doing: "nothing much, just looking at messages", mode: this.status.mode };
+			this.status = { busy: false, doing: "nothing much, just looking at messages", mode: "idle" };
 		}
 	}
 

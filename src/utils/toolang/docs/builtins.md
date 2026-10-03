@@ -187,9 +187,14 @@ Object.fromEntries(pairs)  Object.merge(a, b)   Object.freeze(obj)
 Docker container management via the Docker CLI. All methods return
 `{ stdout: string, stderr: string, exitCode: number }`.
 
+Every call is refused with an error unless `[docker].enabled = true` in
+config, and then runs against `docker.host` under the `allowed_ports` ranges,
+the image allow/deny lists and `max_containers`.
+
 ### Container lifecycle
 
 ```tl
+docker.list() --= name, image and status of every container (tab separated)
 docker.run(container, cmd) --= exec command in container
 docker.create(name, image, config?) --= create container
 docker.remove(container) --= force remove
@@ -239,6 +244,10 @@ set var config to docker.get_file_content("web", "/etc/nginx/nginx.conf")
 docker.edit_file("web", "/app/index.html", "<h1>Hello</h1>")
 docker.mkdir("web", "/app/data", true)
 ```
+
+Paths are limited to letters, digits and `_ . - /` (absolute paths fine, no
+`..`, no spaces), so nothing unescaped reaches a shell. `edit_file` streams
+the content over stdin and refuses payloads above 1 MB.
 
 ---
 

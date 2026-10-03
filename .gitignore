@@ -71,6 +71,7 @@ web_modules/
 !.env.example
 config.*
 !/src/**/*/config.ts
+!/src/**/*/config.test.ts
 
 # local runtime state (sqlite db + toggle persistence)
 modules/data.sqlite*

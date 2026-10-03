@@ -17,34 +17,36 @@ export function Agent(getAgent: () => Agent): Record<string, Function> {
 		agent.getModel(type);
 	};
 	return {
+		// every call here is an internal generation: ephemeral keeps it out of the
+		// rolling conversation memory, and the forced model type picks the right one
 		generate_text: async (prompt: string) => {
 			const agent = getAgent();
 			if (typeof prompt !== "string" || prompt.length === 0) throw new AgentError("agent.generate_text expects a non-empty prompt");
-			return await agent.ask(prompt);
+			return await agent.ask(prompt, undefined, { ephemeral: true });
 		},
 
 		generate_image: async (prompt: string) => {
 			const agent = getAgent();
 			requireModel(agent, "image");
-			return await agent.ask(prompt);
+			return await agent.ask(prompt, undefined, { ephemeral: true, model: "image" });
 		},
 
 		generate_audio: async (prompt: string) => {
 			const agent = getAgent();
 			requireModel(agent, "tts");
-			return await agent.ask(prompt);
+			return await agent.ask(prompt, undefined, { ephemeral: true, model: "tts" });
 		},
 
 		generate_video: async (prompt: string) => {
 			const agent = getAgent();
 			requireModel(agent, "video");
-			return await agent.ask(prompt);
+			return await agent.ask(prompt, undefined, { ephemeral: true, model: "video" });
 		},
 
 		transcript: async (audioUrl: string) => {
 			const agent = getAgent();
 			requireModel(agent, "stt");
-			return await agent.ask(`Transcribe this audio: ${audioUrl}`);
+			return await agent.ask(`Transcribe this audio: ${audioUrl}`, undefined, { ephemeral: true, model: "stt" });
 		},
 	};
 }

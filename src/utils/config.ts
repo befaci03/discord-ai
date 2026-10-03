@@ -53,13 +53,7 @@ export interface ToolangConfig {
 		deniedCommands?: string[];
 		timeoutMs: number;
 	};
-	docker: {
-		enabled: boolean;
-		allowedPorts: string[];
-		disallowedImages: string[];
-		allowedImages?: string[];
-		defaultImage: string;
-	};
+	// docker policy lives in the top level [docker] section (single source of truth)
 }
 
 export interface AgentProviderConfig {
@@ -79,9 +73,37 @@ export interface AgentModelsConfig {
 	rerank_model: { enabled: boolean; provider: string; model: string }[];
 }
 
+/** One seeded person profile ([agent.brain.people].<id>). */
+export interface BrainPersonConfig {
+	description?: string;
+	likes?: string[];
+	dislikes?: string[];
+	personalities?: string[];
+}
+
+/**
+ * The agent's brain: how much it remembers and what it starts out liking.
+ * The seed below only applies while nothing is saved yet, unless `reset` is set,
+ * which wipes the saved state once so the config takes over again.
+ */
+export interface BrainConfig {
+	/** conversation turns the agent remembers (rolling window; 0 = no memory) */
+	memory: number;
+	likes: string[];
+	dislikes: string[];
+	favorites: string[];
+	/** things it wants to get better at */
+	pending: string[];
+	/** people it already knows, keyed by numeric Discord user id */
+	people: Record<string, BrainPersonConfig>;
+	/** true = forget saved brain state at startup and re-seed from this section */
+	reset: boolean;
+}
+
 export interface AgentConfig {
 	name: string;
 	prompt: string;
+	brain: BrainConfig;
 	providers: Record<string, AgentProviderConfig>;
 	models: AgentModelsConfig;
 	toolang: ToolangConfig;
@@ -167,6 +189,7 @@ const DEFAULT_CONFIG: AppConfig = {
 	agent: {
 		name: "Agent",
 		prompt: "You are a helpful Discord agent.",
+		brain: { memory: 30, likes: [], dislikes: [], favorites: [], pending: [], people: {}, reset: false },
 		providers: {},
 		models: {
 			use_same_models: true,
@@ -184,7 +207,6 @@ const DEFAULT_CONFIG: AppConfig = {
 			http: { blockPrivate: true, maxResponseBytes: 2_000_000, timeoutMs: 15_000 },
 			fs: { root: "./sandbox", maxFileSize: 1_000_000, allowWrite: false },
 			node: { enabled: false, timeoutMs: 30_000 },
-			docker: { enabled: false, allowedPorts: [], disallowedImages: [], defaultImage: "debian:bookworm" },
 		},
 	},
 	addons: { enabled: [] },
@@ -193,11 +215,25 @@ const DEFAULT_CONFIG: AppConfig = {
 	logging: { level: "info" },
 };
 
+/**
+ * Map a snake_case config key onto its camelCase counterpart when the defaults
+ * tree spells it that way. example.config.toml uses snake_case for readability
+ * (`allowed_ips`, `max_loop_iterations`); without this those keys landed as
+ * unknown extras and the documented setting was silently ignored.
+ * Keys that already exist (e.g. `passcode_env`, `guild_id`) keep their name.
+ */
+function normalizeKey(key: string, defaults: Record<string, unknown>): string {
+	if (key in defaults || !key.includes("_")) return key;
+	const camel = key.replace(/_([a-z0-9])/g, (_m, c: string) => c.toUpperCase());
+	return camel in defaults ? camel : key;
+}
+
 /** Recursively fill missing keys in `target` from `defaults`. */
 function deepFill(target: Record<string, unknown>, defaults: Record<string, unknown>): Record<string, unknown> {
 	const out: Record<string, unknown> = { ...defaults };
-	for (const [key, value] of Object.entries(target)) {
+	for (const [rawKey, value] of Object.entries(target)) {
 		if (value === undefined) continue;
+		const key = normalizeKey(rawKey, out);
 		const def = out[key];
 		if (def && typeof def === "object" && !Array.isArray(def) && typeof value === "object" && !Array.isArray(value)) {
 			out[key] = deepFill(value as Record<string, unknown>, def as Record<string, unknown>);
@@ -226,6 +262,12 @@ function expandEnv(value: unknown): unknown {
 	return value;
 }
 
+/** Bounded list of trimmed strings; accepts a comma-separated string too. */
+function normStringList(value: unknown, cap: number): string[] {
+	const list = typeof value === "string" ? value.split(",") : Array.isArray(value) ? value : [];
+	return list.map(String).map((s) => s.trim().slice(0, 120)).filter(Boolean).slice(0, cap);
+}
+
 function requireNonEmpty(value: unknown, path: string): string {
 	if (typeof value !== "string" || value.length === 0) throw new Error(`config: '${path}' must be a non-empty string`);
 	return value;
@@ -234,6 +276,30 @@ function requireNonEmpty(value: unknown, path: string): string {
 function validateConfig(cfg: AppConfig): void {
 	// http port sanity
 	cfg.http.port = Math.min(Math.max(Math.floor(Number(cfg.http.port) || 3000), 1), 65535);
+
+	// brain: bounded memory + normalized taste lists (this feeds the system prompt,
+	// so caps apply even though the file is operator-controlled)
+	const b = cfg.agent.brain;
+	const mem = Number(b.memory);
+	b.memory = Number.isFinite(mem) ? Math.min(Math.max(Math.floor(mem), 0), 200) : 30;
+	for (const key of ["likes", "dislikes", "favorites", "pending"] as const) {
+		b[key] = normStringList(b[key], 50);
+	}
+	b.reset = b.reset === true;
+	if (typeof b.people !== "object" || b.people === null || Array.isArray(b.people)) b.people = {};
+	b.people = Object.fromEntries(
+		Object.entries(b.people)
+			.slice(0, 50)
+			.map(([id, p]) => {
+				const person = (p ?? {}) as BrainPersonConfig;
+				return [id, {
+					description: String(person.description ?? "").slice(0, 500),
+					likes: normStringList(person.likes, 25),
+					dislikes: normStringList(person.dislikes, 25),
+					personalities: normStringList(person.personalities, 25),
+				} satisfies BrainPersonConfig];
+			}),
+	);
 
 	// toolang limits get clamped, never trusted raw
 	const t = cfg.agent.toolang;

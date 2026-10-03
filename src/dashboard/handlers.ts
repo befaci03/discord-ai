@@ -9,6 +9,7 @@ import { ToolRegistry, runTool } from "../modules/tools.js";
 import { SkillRegistry } from "../modules/skills.js";
 import { AddonRegistry, availableAddons } from "../modules/addons.js";
 import { ToolContext } from "../modules/types.js";
+import { llmAvailable } from "../agent/factory.js";
 import { LiveBus } from "./live.js";
 
 export interface DashboardDeps {
@@ -134,7 +135,7 @@ export async function handleApi(req: IncomingMessage, deps: DashboardDeps, path:
 					enabled_addons: config.addons.enabled,
 					known_addons: availableAddons(),
 					health: systemInfo(),
-					agent: { name: config.agent.name, llm: config.agent.providers ? "configured" : "off" },
+					agent: { name: config.agent.name, llm: llmAvailable(config) ? "configured" : "off" },
 					bot: {
 						online: !!client?.user,
 						user: client?.user?.tag ?? null,

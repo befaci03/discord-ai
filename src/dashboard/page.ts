@@ -240,17 +240,17 @@ function renderManager() {
 	const rows = [];
 	for (const t of toolsCache) {
 		rows.push('<div class="mrow"><span class="name' + (t.enabled ? '' : ' off') + '">' + esc(t.name) + '</span>' +
-			'<button class="tgl' + (t.enabled ? ' on' : '') + '" onclick="toggle(\'tool\',\'' + esc(t.name) + '\',' + (!t.enabled) + ')">' + (t.enabled ? 'on' : 'off') + '</button></div>');
+			'<button class="tgl' + (t.enabled ? ' on' : '') + '" onclick="toggle(&quot;tool&quot;,&quot;' + esc(t.name) + '&quot;,' + (!t.enabled) + ')">' + (t.enabled ? 'on' : 'off') + '</button></div>');
 	}
 	for (const s of skillsCache) {
 		rows.push('<div class="mrow"><span class="name' + (s.enabled ? '' : ' off') + '">skill: ' + esc(s.name) + '</span>' +
-			'<button class="tgl' + (s.enabled ? ' on' : '') + '" onclick="toggle(\'skill\',\'' + esc(s.name) + '\',' + (!s.enabled) + ')">' + (s.enabled ? 'on' : 'off') + '</button></div>');
+			'<button class="tgl' + (s.enabled ? ' on' : '') + '" onclick="toggle(&quot;skill&quot;,&quot;' + esc(s.name) + '&quot;,' + (!s.enabled) + ')">' + (s.enabled ? 'on' : 'off') + '</button></div>');
 	}
 	for (const a of addonsCache) {
 		const enabled = a.enabled !== false && a.configured;
 		rows.push('<div class="mrow"><span class="name' + (enabled ? '' : ' off') + '">addon: ' + esc(a.name) + '</span>' +
 			(a.configured
-				? '<button class="tgl' + (enabled ? ' on' : '') + '" onclick="toggle(\'addon\',\'' + esc(a.name) + '\',' + (!enabled) + ')">' + (enabled ? 'on' : 'off') + '</button>'
+				? '<button class="tgl' + (enabled ? ' on' : '') + '" onclick="toggle(&quot;addon&quot;,&quot;' + esc(a.name) + '&quot;,' + (!enabled) + ')">' + (enabled ? 'on' : 'off') + '</button>'
 				: '<span class="bad" title="' + esc(a.error || 'not configured') + '">off</span>'));
 	}
 	$("manager").innerHTML = rows.length === 0 ? '<span class="dim">nothing loaded</span>' : rows.join("");

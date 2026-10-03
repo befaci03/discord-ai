@@ -25,3 +25,18 @@
   dashboard routes traffic in from localhost, which makes `allowed_ips` a
   non-barrier: the passcode plus the login rate limiter are the real defense,
   so keep a strong `DASHBOARD_PASSCODE` and set `DASHBOARD_SECRET`.
+- Mention abuse: every reply leaves the bot with `allowedMentions` limited to
+  `parse: []`, so model output (which can be steered by a prompt injection)
+  can never ping `@everyone`, `@here`, a role or a user, and the per-ask
+  context tells the model which permissions it actually has instead of
+  letting it promise moderation actions it cannot perform.
+- Docker: every `docker.*` operation funnels through a single gate that
+  refuses to run while `[docker].enabled = false` (it used to be read and
+  never enforced). Images from the caller pass the allow/deny lists before
+  they reach the CLI (including `create`, which previously skipped them),
+  ports are range-checked against `allowed_ports`, `max_containers` is
+  enforced before a create, container/image names are pattern-validated,
+  and commands run from an argv array with no shell. While docker is off the
+  `docker_*` tools are not even offered to the model; if they do get called
+  (`!docker_list`), they fail with an explicit "docker is disabled" error
+  instead of a silent no-op.
