@@ -12,8 +12,8 @@ import { AgentFunction } from "../modules/types.js";
 
 /**
  * Wrap addon capabilities as LLM-callable tools.
- * Dangerous (mutating) calls are audit-logged: actor, function, repo target,
- * never argument bodies (they may contain user content at scale).
+ * Dangerous (mutating) calls are audit-logged: actor, function, repo/recipient
+ * target, never argument bodies (they may contain user content at scale).
  * `guard` (optional) is checked at CALL time so runtime-disabled addons are
  * refused immediately, even though the tool list was built at startup.
  */
@@ -28,7 +28,7 @@ export function addonFunctionsToTools(
 		parameters: f.parameters,
 		invoker: async (args: Record<string, unknown>) => {
 			if (guard && !guard(f.name)) throw new Error(`addon function '${f.name}' is disabled`);
-			if (f.dangerous && audit) await audit(f.name, String(args.repo ?? args.place ?? ""));
+			if (f.dangerous && audit) await audit(f.name, String(args.repo ?? args.place ?? args.to ?? ""));
 			return await f.execute(args);
 		},
 	}));

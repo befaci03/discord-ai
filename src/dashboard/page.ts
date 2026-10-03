@@ -209,7 +209,7 @@ function renderStatus(s) {
 		'<div class="kv"><span>uptime</span><span class="ok">' + sys.uptimeSec + 's</span></div>';
 	$("system").innerHTML =
 		'<div class="kv"><span>platform</span><span>' + esc(sys.platform || '') + '</span></div>' +
-		'<div class="kv"><span>node</span><span>' + esc(sys.node || '') + '</span></div>' +
+		'<div class="kv"><span>runtime</span><span>' + esc(sys.runtime || sys.node || '') + '</span></div>' +
 		'<div class="kv"><span>memory</span><span>' + (sys.memUsedPct ?? '?') + '% of ' + (sys.memTotalMb ?? '?') + 'MB</span></div>' +
 		'<div class="kv"><span>load (1m)</span><span>' + (sys.load1m ?? '?') + '</span></div>';
 	$("bot").innerHTML =

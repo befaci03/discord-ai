@@ -12,7 +12,7 @@
 
 import { createPool, type Pool } from "mariadb";
 
-import DB, { UserRow, AuditRow, ToolRunRow, ChatRow, ToolRunListener, AuditListener } from "./struct";
+import DB, { UserRow, AuditRow, ToolRunRow, ChatRow, ToolRunListener, AuditListener } from "./struct.js";
 import { MAX_ID, MAX_USERNAME, MAX_GUILD_ID, MAX_TARGET, MAX_ACTION, MAX_CONTENT, MAX_KV, MAX_KV_KEY, MAX_KV_NS, MAX_TOOL, MAX_CALLER, MAX_ERROR, MAX_DETAILS } from "./constants.js";
 
 interface MariaDBConfig {

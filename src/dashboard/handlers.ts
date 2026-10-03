@@ -100,11 +100,13 @@ function coerceArgs(raw: Record<string, unknown>, argDefs: { name: string; type:
 	return out;
 }
 
-function systemInfo() {
+export function systemInfo() {
 	const mem = { total: os.totalmem(), free: os.freemem() };
+	// Bun reports a Node-compatible process.version; show the real runtime
+	const bunVer = (process.versions as Record<string, string | undefined>).bun;
 	return {
 		platform: `${os.platform()} ${os.arch()}`,
-		node: process.version,
+		runtime: bunVer ? `bun ${bunVer} (node compat ${process.version})` : `node ${process.version}`,
 		uptimeSec: Math.floor(process.uptime()),
 		memUsedPct: Math.round(((mem.total - mem.free) / mem.total) * 100),
 		memTotalMb: Math.round(mem.total / 1024 / 1024),

@@ -131,7 +131,7 @@ rerank_model = [{ enabled = false, provider = "openai", model = "" }]           
 # (use the [addons] header below, NOT "addons.enabled = ..." dotted form:
 #  after a table header like [agent.models] a dotted key lands in that table)
 [addons]
-enabled = ["weather"] # e.g. ["github", "weather", "tunnel"]
+enabled = ["weather"] # e.g. ["github", "weather", "tunnel", "smtp"]
 
 # per-addon settings (all optional, secrets should be env vars)
 # having this section does NOT enable github; only addons.enabled does
@@ -152,3 +152,22 @@ service = "" # "" = the dashboard (http://<http.host>:<http.port>), or e.g. "htt
 hostname = "" # named mode only: your public hostname, e.g. "dash.example.com" (created in the CF dashboard)
 # note: published dashboard traffic arrives from localhost, so allowed_ips in
 # [http] stops being a network barrier - the passcode is the real barrier.
+
+[addons.smtp]
+# lets the agent send email through your SMTP relay (nodemailer, pure JS,
+# no shell). host + from are REQUIRED once "smtp" joins addons.enabled,
+# otherwise the addon reports "not configured" and loads nothing.
+host = "" # e.g. "smtp.example.com"
+port = 587 # 587 = STARTTLS, 465 = implicit TLS (then set secure = true)
+secure = false # true = TLS from the first byte (SMTPS, usually port 465)
+# user = "" # optional relay auth
+# pass = "" # keep the password out of this file: pass = "${SMTP_PASSWORD}"
+from = "" # REQUIRED sender identity, e.g. "My Bot <bot@example.com>"
+allowed_recipients = [] # empty = the agent may email ANYONE. Strongly
+# recommended: list exact addresses ("me@example.com") or "@example.com"
+# domain entries so a prompt-injected agent can only ever reach your inbox.
+require_tls = true # refuse sessions that cannot upgrade to TLS (TLSv1.2+)
+timeout_ms = 15000
+attachment_dir = "" # "" = the toolang fs root (./sandbox); attachments are
+# realpath-jailed inside this directory with size caps, the agent can never
+# attach config.toml, .env or anything outside of it.

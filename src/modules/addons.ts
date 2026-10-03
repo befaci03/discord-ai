@@ -8,8 +8,9 @@ import { Addon, AddonStatus, AgentFunction, ModuleError } from "./types.js";
 import { GitHub } from "../../modules/addons/github.js";
 import { Weather } from "../../modules/addons/weather.js";
 import { Tunnel } from "../../modules/addons/tunnel.js";
+import { SMTP } from "../../modules/addons/smtp.js";
 
-const BUILTINS: Addon[] = [GitHub, Weather, Tunnel];
+const BUILTINS: Addon[] = [GitHub, Weather, Tunnel, SMTP];
 
 export class AddonRegistry {
 	private active = new Map<string, Addon>();

@@ -9,7 +9,7 @@
   "moduleResolution": "nodenext",
   "types": [
    "node",
-   "jest"
+   "bun"
   ],
   "allowSyntheticDefaultImports": true,
   "strict": true,

@@ -2,11 +2,22 @@
 
 ## Security Practices
 
-- Keep dependencies up to date *except `discord.js` **if not a security update***; review dependency changes for security fixes.
+- Keep dependencies up to date *except `discord.js` **if not a security update***; review dependency changes for security fixes. Installs run through `bun install` with `bun.lock` as the single lockfile (`yarn.lock` was removed). Install-time lifecycle scripts are blocked by default; the one deliberate exception is `trustedDependencies: ["bcrypt"]`, whose `node-gyp-build` script picks the shipped prebuilt binary (compiling from source only as a fallback).
 - Avoid storing secrets in the repository; use environment variables or secret management.
 - Addons load only when their slug is listed in `addons.enabled`; an
   `[addons.<slug>]` settings section alone never activates code, and ignored
   sections are reported at startup.
+- SMTP addon: the model only supplies to/subject/body/attachments; the sender
+  identity, relay and every other header are operator config. Addresses and
+  subjects are validated before any network I/O (no CR/LF: no header
+  injection), recipients go through `allowed_recipients` (empty = any address,
+  an operator choice the startup note calls out), and attachments are
+  realpath-jailed to `attachment_dir` with size caps, read into memory so the
+  transport never touches the filesystem itself. TLS is required by default
+  (TLSv1.2+), the password never appears in logs, responses or errors, sends
+  are audit-logged with the recipient only (never the body), and the
+  function description carries prompt-level guardrails (send only what the
+  user asked for, to whom they said).
 - Cloudflare Tunnel addon: `cloudflared` is spawned without a shell (argument
   array, no `sh -c`), the named-mode tunnel token travels via the child's
   environment only (never `argv`, logs or API responses; output is redacted as

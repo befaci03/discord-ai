@@ -1,4 +1,9 @@
 ---
+name = "toolang"
+description = "TooLang reference: lexer/parser tokens, builtin catalog with signatures, security and permission model, CLI training and lint modes, runtime debug interface and glossary for the .tl tool language"
+triggers = ["toolang", "too lang", ".tl file"]
+priority = 0
+---
 
 # TOOLANG reference — continued
 
@@ -552,7 +557,7 @@ should:
 1. Read the existing tool file.
 2. Compare against this skill (header JSON + syntax + safety).
 3. Rewrite the body, keeping the `¤` delimiter.
-4. Re-run `npx tsc` to confirm nothing else broke.
+4. Re-run `bun run typecheck` to confirm nothing else broke.
 
 ---
 
@@ -765,7 +770,7 @@ Backend-specific:
 - [ ] Network calls respect `http.allowedHosts` / `blockPrivate`.
 - [ ] No secrets in logs or responses.
 - [ ] Example comment at the bottom (`-- example: ...`).
-- [ ] `npx tsc` passes for the whole project.
+- [ ] `bun run typecheck` passes for the whole project.
 
 ---
 

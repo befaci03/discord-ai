@@ -14,7 +14,7 @@ import { LiveBus } from "./dashboard/live.js";
 import { createDB } from "./db/index.js";
 import { ToolRunRow, AuditRow } from "./db/struct.js";
 import { startBot } from "./bot.js";
-require('dotenv').config();
+// .env is loaded natively by Bun (shell env still wins over the file)
 
 async function main(): Promise<void> {
 	const config = loadConfig();
@@ -141,3 +141,10 @@ async function main(): Promise<void> {
 		process.exit(0);
 	});
 }
+
+// entry point invocation (was missing in every commit: the file only ever
+// *declared* main, so running the app loaded it and did nothing)
+main().catch((err: unknown) => {
+	console.error("[main] fatal:", err instanceof Error ? (err.stack ?? err.message) : String(err));
+	process.exit(1);
+});

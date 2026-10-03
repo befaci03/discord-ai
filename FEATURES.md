@@ -62,7 +62,8 @@ Methods on values: strings (30+), numbers (14), arrays (20+), objects (9).
 - trigger matching: substrings or `/regex/`
 - matched skills inject their instructions into the agent's system prompt,
   with a total size budget
-- premade skill: `TOOLANG` (teaches the agent to write tools)
+- premade skill: `toolang` (`modules/skills/TOOLANG.md`, teaches the agent to
+  write tools; the parser requires a lowercase `name`, so it loads as `toolang`)
 
 ## Addons (`addons.enabled` in config.toml)
 
@@ -75,6 +76,7 @@ plain chat. Mutating functions are flagged and audit-logged.
 | `github` | account control: create/close/reopen issues, comment on issues+PRs, merge PRs, star repos, browse repos/issues/PRs/releases, list own repos. Token: GITHUB_TOKEN env. Optional `allowed_repos` allowlist (strongly recommended) and `default_owner` shorthand |
 | `weather` | current conditions and 1-7 day forecasts via Open-Meteo (no API key) |
 | `tunnel` | publishes the dashboard (or another local service) through a Cloudflare Tunnel: `cloudflared` creates a public HTTPS route with no open firewall port. `mode = "quick"` (default) creates an ephemeral `https://xxx.trycloudflare.com` URL with no account/token; `mode = "named"` runs your Cloudflare-managed tunnel (token via `CF_TUNNEL_TOKEN` env, passed to the child via env only, never argv/logs). Agent gets a read-only `tunnel_status` function |
+| `smtp` | send plain-text email through the operator's SMTP relay (nodemailer, pure JS). `smtp_send_email` (mutating, audit-logged with the recipient) validates address/subject before any network I/O, enforces `allowed_recipients` (empty = any) and jails attachments to `attachment_dir` (default: fs root, realpath-checked, size-capped). `smtp_verify` tests the relay without sending. TLSv1.2+ required by default; from/relay/password are operator config the model can never touch |
 
 Only slugs listed in `addons.enabled` are loaded. An `[addons.<slug>]`
 settings section never enables anything by itself: sections outside the list
@@ -107,7 +109,7 @@ authentication and live updates:
   `/ws`, cookie-authenticated, ping/pong heartbeat, 64KB frame cap, JSON
   push protocol (`snapshot` on connect, then `event` frames: tool runs,
   audit entries, bot status)
-- cards: status, system (platform/mem/load), bot+agent state, addon state,
+- cards: status, system (platform/runtime/mem/load), bot+agent state, addon state,
   security (sessions + login-guard stats), per-tool run stats, live feed,
   recent audit trail, tool runner, tools & skills manager
 - runtime toggles: enable/disable any loaded tool, skill or addon from the UI

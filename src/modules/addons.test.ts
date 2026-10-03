@@ -2,6 +2,7 @@
 // [addons.<slug>] settings section never enables anything by itself, and
 // sections outside the list are reported as ignored at startup.
 
+import { describe, test, expect, beforeEach } from "bun:test";
 import { loadConfig, resetConfigCache, AppConfig } from "../utils/config.js";
 import { AddonRegistry } from "./addons.js";
 

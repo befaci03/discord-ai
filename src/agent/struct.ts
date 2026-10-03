@@ -1,5 +1,5 @@
 import { type Presence, type Role, type VoiceState, type PresenceStatus } from "discord.js";
-import DB from "../db/struct";
+import DB from "../db/struct.js";
 import { ChatCompletion } from "openai/resources.mjs";
 
 type HistoryType = (Message | string)[]; // message or task

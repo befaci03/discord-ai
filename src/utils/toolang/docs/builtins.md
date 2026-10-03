@@ -137,7 +137,7 @@ set var output to result.stdout
 
 ### bcrypt
 
-Password hashing (requires `bcrypt` package: `yarn add bcrypt @types/bcrypt`).
+Password hashing (requires `bcrypt` package: `bun add bcrypt && bun add -d @types/bcrypt`).
 
 ```tl
 node.bcrypt.hash(password, salt?)

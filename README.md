@@ -7,10 +7,14 @@ writing agent tools in `.tl` files.
 ## Quick start
 
 ```bash
-yarn install
+bun install
 cp example.config.toml config.toml   # then edit it
-DISCORD_TOKEN=yourtoken yarn dev
+DISCORD_TOKEN=yourtoken bun run dev
 ```
+
+Requires [Bun](https://bun.sh) 1.4.2+: the TypeScript sources run directly,
+there is no build step. (Bun 1.3 crashes while loading the mongodb driver's
+bson module; 1.4.2 fixed it.)
 
 No `config.toml`? The bot copies `example.config.toml` for you on first run
 and tells you to edit it. Secrets should come from the environment: use
@@ -44,7 +48,7 @@ Addons give the agent itself new powers the LLM calls during conversation:
 
 ```toml
 [addons]
-enabled = ["github", "weather", "tunnel"] # the ONLY list that loads addons
+enabled = ["github", "weather", "tunnel", "smtp"] # the ONLY list that loads addons
 
 [addons.github]
 default_owner = "befaci03"
@@ -57,6 +61,10 @@ allowed_repos = ["befaci03/discord-ai"]   # strongly recommended
 - `tunnel`: publishes the dashboard through a Cloudflare Tunnel (public HTTPS
   route, no open port). Needs the `cloudflared` binary; quick mode needs no
   account, named mode reads `CF_TUNNEL_TOKEN` from the environment.
+- `smtp`: sends plain-text email through your SMTP relay (nodemailer, pure
+  JS). Needs `host` + `from`; TLS is required by default, `allowed_recipients`
+  empty = the agent may email anyone (list them, seriously), attachments are
+  realpath-jailed to `attachment_dir` (default: `./sandbox`).
 
 A slug that is not in `addons.enabled` is ignored, even when an
 `[addons.<slug>]` settings section exists (it is reported as ignored at
@@ -90,13 +98,13 @@ Instructions the agent receives when a trigger matches.
 ## Tests
 
 ```bash
-yarn test          # jest suite (src/modules/addons.test.ts covers the addons.enabled gate)
-npx tsc --noEmit   # typecheck; `yarn build` runs the same check
+bun test           # bun's built-in runner (addons gate + smtp addon + bun:sqlite backend)
+bun run typecheck  # tsc --noEmit
 ```
 
-TypeScript 7 is the native build with no JS compiler API, so jest transpiles
-the tests with babel (`jest.config.js`) instead of ts-jest. Type errors stay
-`npx tsc`'s job.
+Tests import from `bun:test` and live next to the code as `*.test.ts`.
+Bun strips types at run time but never checks them, so type errors stay
+`tsc`'s job.
 
 ## Security
 

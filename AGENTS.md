@@ -52,7 +52,7 @@ DISCLAIMER: please **strictly** follow .llmignore and .editorconfig, and read th
 * Insecure defaults such as debug mode enabled, permissive admin bootstrap flows, missing secure headers, and disabled rate limits.
 
 # Rules to respect when editing/creating/deleting/moving files
-* The codebase should be in Node.js with Yarn (TypeScript)
+* The codebase should be in Bun with TypeScript (bun runs TS natively: `bun install`, `bun run dev`, `bun test`; no yarn/npm, no build step)
 * Only use HTML with CSS and Javascript in the HTML (unless it's shared across over HTMLs)
 * No sphagetti code, make it clear.
 
