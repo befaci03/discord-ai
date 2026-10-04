@@ -5,6 +5,7 @@
 import { describe, test, expect, beforeEach } from 'bun:test';
 import { loadConfig, resetConfigCache, AppConfig } from '../utils/config.js';
 import { buildAgent } from '../agent/factory.js';
+import { answerText } from '../agent/llmtools.js';
 import { Tool } from '../agent/struct.js';
 import SQLiteDB from '../db/sqlite.js';
 import { Logger } from '../utils/logger.js';
@@ -101,5 +102,31 @@ describe('dedicated coding model routing', () => {
 		expect(brain.dedicatedCodingModel).toBe(false);
 		expect(brain.routeModel('def hello(): pass')).toBe('coding');
 		expect(brain.routeModel('salut ca va?')).toBe('default');
+	});
+});
+
+describe('answerText: what the llm_* tools hand back to the model', () => {
+	const of = (content: unknown) => ({ choices: [{ message: { content } }] });
+
+	test('plain string answers pass through, capped at 16k chars', () => {
+		expect(answerText(of('done'))).toBe('done');
+		expect(answerText(of('x'.repeat(20_000))).length).toBe(16_000);
+	});
+
+	test('content parts (array shape) are joined into text', () => {
+		const parts = [
+			{ type: 'text', text: 'hello ' },
+			{ type: 'text', text: 'world' }
+		];
+		expect(answerText(of(parts))).toBe('hello world');
+		// junk parts contribute nothing instead of throwing
+		expect(answerText(of([{ type: 'image_url' }, 'plain', { text: 'kept' }]))).toBe('plainkept');
+	});
+
+	test('missing or empty answers get a visible placeholder, never a throw', () => {
+		expect(answerText({})).toBe('(the model returned no text)');
+		expect(answerText(of(null))).toBe('(the model returned no text)');
+		expect(answerText(of(''))).toBe('(the model returned no text)');
+		expect(answerText(of(42))).toBe('(the model returned no text)');
 	});
 });

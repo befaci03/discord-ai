@@ -17,13 +17,36 @@ const SEND_PERMS = ['SendMessages', 'SendMessagesInThreads'];
 export function Discord(getClient: () => DiscordClient): Record<string, Function> {
 	const ctx = makeCtx(getClient);
 
+	/**
+	 * message id -> channel id. Without it every lookup probes every cached
+	 * channel (N REST fetches per edit/delete/get); with it a repeated lookup
+	 * is one call. Bounded FIFO: old entries fall off first.
+	 */
+	const msgChannel = new Map<string, string>();
+	const rememberChannel = (messageId: string, channelId: string): void => {
+		if (msgChannel.size >= 500) msgChannel.delete(msgChannel.keys().next().value as string);
+		msgChannel.set(messageId, channelId);
+	};
 	const findMessage = async (messageId: string): Promise<any> => {
 		const id = assertSnowflake(messageId, 'message_id');
+		// fast path: we have fetched this message before, ask that channel only
+		const cachedChannel = msgChannel.get(id);
+		if (cachedChannel) {
+			try {
+				const ch = await getClient().channels.fetch(cachedChannel);
+				if (ch && 'messages' in ch) return await (ch as any).messages.fetch(id);
+			} catch {
+				/* stale entry: fall through to the scan */
+			}
+			msgChannel.delete(id);
+		}
 		const channels = getClient().channels.cache.values();
 		for (const ch of channels) {
 			if (!ch.isTextBased() || !('messages' in ch)) continue;
 			try {
-				return await (ch as any).messages.fetch(id);
+				const msg = await (ch as any).messages.fetch(id);
+				rememberChannel(id, ch.id);
+				return msg;
 			} catch {
 				continue;
 			}
@@ -166,6 +189,9 @@ export function Discord(getClient: () => DiscordClient): Record<string, Function
 			const question = String(title ?? '').trim();
 			if (question.length === 0 || question.length > 300) throw new DiscordError('send_poll: title must be 1..300 chars');
 			if (!Array.isArray(options) || options.length < 2 || options.length > 10) throw new DiscordError('send_poll: needs 2..10 answers');
+			for (const [i, o] of options.entries()) {
+				if (String(o?.label ?? '').trim().length === 0) throw new DiscordError(`send_poll: answer ${i + 1} needs a non-empty label`);
+			}
 			if (typeof durationHours !== 'number' || !Number.isFinite(durationHours) || durationHours < 1 || durationHours > 768) {
 				throw new DiscordError('send_poll: duration_hours must be 1..768 (32 days)');
 			}

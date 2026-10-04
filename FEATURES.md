@@ -321,7 +321,11 @@ roles out of reach). All sends use `allowedMentions { parse: [] }`.
 
 ## Bot + agent (`src/bot.ts`, `src/index.ts`, `src/agent/`)
 
-- Discord gateway with mention handling and input length limits
+- Discord gateway with mention handling and input length limits: an
+  image-only mention (@bot + attachment, no text) is still answered (the
+  model gets a placeholder prompt instead of the message being dropped),
+  and the opt-in name gate (`answer_when_name_mention`) matches the
+  agent's name as its own word ("bot" hits "bot," but not "robot")
 - explicit tool invocation from chat: `!toolname key=value key2="quoted value"`
 - every successful exchange is written to the chat table and pulled back into
   memory on the next boot (size-capped rows)

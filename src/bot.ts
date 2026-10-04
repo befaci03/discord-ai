@@ -89,10 +89,7 @@ export async function startBot(deps: BotDeps): Promise<Client> {
 			// answer when mentioned, or (opt-in) when the agent's name is said:
 			// the flag used to be inverted, which ignored exactly those messages
 			const mentioned = message.mentions.has(client.user as never);
-			const agentName = String(config.agent.name ?? '')
-				.trim()
-				.toLowerCase();
-			const named = config.bot.answer_when_name_mention === true && agentName.length > 0 && message.content.toLowerCase().includes(agentName);
+			const named = config.bot.answer_when_name_mention === true && mentionsName(message.content, config.agent.name);
 			if (!mentioned && !named) return;
 
 			// optional guild scoping: when guild_id is set, ignore other guilds
@@ -101,10 +98,14 @@ export async function startBot(deps: BotDeps): Promise<Client> {
 			if (config.bot.channel_id && message.channelId !== config.bot.channel_id) return;
 
 			const content = message.content.replace(/<@!?[0-9]+>/g, '').trim();
-			if (content.length === 0 || content.length > 2000) return; // length limit on untrusted input
+			if (content.length > 2000) return; // length limit on untrusted input
 			// image attachments: https Discord-CDN image URLs only, capped; the
 			// agent forwards them only to a vision-capable model (see agent/vision.ts)
 			const images = pickImageUrls([...message.attachments.values()].map((a) => ({ contentType: a.contentType, url: a.url })));
+			// an image-only mention (@bot + attachment, no text) still counts: the
+			// model gets a placeholder prompt instead of the message being dropped
+			if (content.length === 0 && images.length === 0) return;
+			const prompt = content.length > 0 ? content : '(no text: the message contains image attachments)';
 
 			await db.upsertUser({ id: message.author.id, username: message.author.username });
 
@@ -162,7 +163,7 @@ export async function startBot(deps: BotDeps): Promise<Client> {
 			);
 			let reply = '';
 			try {
-				const completion = await agent.ask(content, system, {
+				const completion = await agent.ask(prompt, system, {
 					speakerId: message.author.id,
 					onToolCall: (names) => exec.update(names),
 					images
@@ -197,7 +198,7 @@ export async function startBot(deps: BotDeps): Promise<Client> {
 					author_id: message.author.id,
 					username: message.author.username,
 					guild_id: message.guildId ?? '',
-					content,
+					content: prompt,
 					response: reply
 				});
 			} else {
@@ -216,6 +217,29 @@ export async function startBot(deps: BotDeps): Promise<Client> {
 
 	await client.login(config.bot.token);
 	return client;
+}
+
+/**
+ * Does `text` say `name` as its own word? Word boundaries are unicode-aware,
+ * so "bot" hits "bot," and "bot's" but not "robot", and a name like "café"
+ * still matches (regex \\b is ASCII-only). Empty names never match: otherwise
+ * answer_when_name_mention would answer EVERY message.
+ */
+export function mentionsName(text: unknown, name: unknown): boolean {
+	const hay = String(text ?? '').toLowerCase();
+	const needle = String(name ?? '')
+		.trim()
+		.toLowerCase();
+	if (needle.length === 0) return false;
+	const isWord = /[\p{L}\p{N}_]/u;
+	let idx = hay.indexOf(needle);
+	while (idx !== -1) {
+		const before = idx === 0 ? '' : hay[idx - 1];
+		const after = hay[idx + needle.length] ?? '';
+		if (!isWord.test(before) && !isWord.test(after)) return true;
+		idx = hay.indexOf(needle, idx + 1);
+	}
+	return false;
 }
 
 /**

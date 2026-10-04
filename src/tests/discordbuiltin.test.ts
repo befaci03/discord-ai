@@ -582,6 +582,51 @@ describe('discord member and guild powers', () => {
 	});
 });
 
+describe('discord lookup caching and poll validation', () => {
+	test('message lookups remember their channel instead of re-probing everything', async () => {
+		const msg = mockMessage(MSG_ID, {});
+		let probesA = 0;
+		const channelA = mockChannel('100000000000000020', { byId: {} });
+		const fetchA = (channelA as { messages: { fetch: (arg: unknown) => Promise<unknown> } }).messages.fetch;
+		(channelA as { messages: { fetch: (arg: unknown) => Promise<unknown> } }).messages.fetch = async (arg: unknown) => {
+			probesA++;
+			return await fetchA(arg);
+		};
+		const channelB = mockChannel('100000000000000021', { byId: { [MSG_ID]: msg } });
+		const list = [channelA, channelB];
+		const d = mod(mockClient({ channels: list }));
+
+		expect((await d.get_message(MSG_ID)).id).toBe(MSG_ID);
+		expect(probesA).toBe(1); // scanned A once, found it in B
+		expect((await d.get_message(MSG_ID)).id).toBe(MSG_ID);
+		expect(probesA).toBe(1); // memoized: A was not probed again
+
+		// stale memo entry (channel gone) falls back to the scan, then errors clearly
+		list.splice(1, 1);
+		await throws(() => d.get_message(MSG_ID), 'not found');
+		expect(probesA).toBe(2);
+	});
+
+	test('poll answers are validated before permissions are even looked at', async () => {
+		const guild = mockGuild({ mePerms: [] });
+		const sendCalls: Record<string, unknown[]> = {};
+		const channel = mockChannel(CHANNEL_ID, { guild, perms: [], send: sendCalls });
+		const d = mod(mockClient({ guild, channels: [channel] }));
+
+		await throws(() => d.send_poll(CHANNEL_ID, '', [{ label: 'a' }, { label: 'b' }], 24), 'title');
+		await throws(() => d.send_poll(CHANNEL_ID, 'Q?', [{ label: 'a' }], 24), '2..10');
+		await throws(() => d.send_poll(CHANNEL_ID, 'Q?', [{ label: 'a' }, { label: '   ' }], 24), 'answer 2');
+		await throws(() => d.send_poll(CHANNEL_ID, 'Q?', [{ label: 'a' }, { label: 'b' }], 0), '1..768');
+		await throws(() => d.send_poll(CHANNEL_ID, 'Q?', [{ label: 'a' }, { label: 'b' }], 24), 'SendMessages');
+
+		channel.grant('SendMessages');
+		await d.send_poll(CHANNEL_ID, 'Q?', [{ label: 'a' }, { label: 'b' }], 24);
+		const payload = (sendCalls.sent as [Record<string, unknown>][])[0][0] as { poll: { answers: unknown[] }; allowedMentions: unknown };
+		expect(payload.poll.answers.length).toBe(2);
+		expect(payload.allowedMentions).toEqual({ parse: [] });
+	});
+});
+
 describe('discord through the TooLang interpreter', () => {
 	test('set_presence works end to end and its errors reach the model', async () => {
 		const client = mockClient();

@@ -112,7 +112,6 @@ docker.mvdir("container", "path/to/dir", "new/path")
 discord.make_embed({ author: { name: "", icon_url: "" }, title: "", description: "", fields: [{ name: "", value: "" }], footer: { text: "", icon_url: "" } }, [[{ "type": "button", "label": "", "emoji": "", "style": "primary/secondary/danger/success" }], { type: "select", options: [{ label: "", value: "" }], placeholder: "Second row, select menu needs to be alone in a row so this is only a JSON object" }])
 discord.make_attachment({ name: "", type: "http", data: "https://" })
 discord.make_attachment({ name: "", type: "custom", data: "Hello, World! I can also put binary in here (hopefully)" })
-discord.make_msgv2() --= TODO
 discord.send_message("message content", { embeds: [discord.make_embed(...)], "attachments": [discord.make_attachment({...})] })
 discord.react("message_id", "emoji")
 discord.remove_reaction("message_id", "emoji", "user_id (nullable, own reaction by default)")

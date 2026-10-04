@@ -12,9 +12,10 @@ import { rerankDocs } from '../utils/toolang/builtins/agent.js';
 const PROMPT_CAP = 4_000;
 
 /** Extract the text of a ChatCompletion-ish answer, capped. */
-function answerText(res: { choices?: { message?: { content?: unknown } }[] }): string {
+export function answerText(res: { choices?: { message?: { content?: unknown } }[] }): string {
 	const raw = res.choices?.[0]?.message?.content;
-	const text = typeof raw === 'string' ? raw : '';
+	// gateways answer with a plain string OR content parts ([{ type, text }])
+	const text = typeof raw === 'string' ? raw : Array.isArray(raw) ? raw.map((p) => (typeof p === 'string' ? p : String((p as { text?: unknown })?.text ?? ''))).join('') : '';
 	return text.length > 0 ? text.slice(0, 16_000) : '(the model returned no text)';
 }
 
