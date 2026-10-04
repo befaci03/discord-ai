@@ -51,6 +51,7 @@ export function environmentBlock(config: AppConfig, opts: EnvInfoOptions = {}): 
 		lines.push(
 			`- docker: ON. Host ports you may publish: ${ports} (bound to ${d.bindAddress}: loopback = only this machine reaches them). A port must fall inside one of those ranges; 0 = publish no port. ` +
 				`Host paths you may mount into containers: ${mounts}. ` +
+				`Your volumes: give a volume id and it resolves to ${config.agent.toolang.fs.root}/.docker-vols/<volume_id> (mount with the volume/volume_path args on docker_create, or docker_manage action=mount); the sandbox store needs no allowed_volume_paths entry. ` +
 				`Max containers: ${d.maxContainers}. Default image: ${d.defaultImage}. Blocked image prefixes: ${d.disallowedImages.join(', ') || 'none'}` +
 				`${d.allowedImages && d.allowedImages.length > 0 ? `. Allowed images: ${d.allowedImages.join(', ')}` : ''}.`
 		);

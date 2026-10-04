@@ -18,7 +18,8 @@ const ARG_DEF_SCHEMA = {
 	properties: {
 		name: { type: 'string', description: 'argument name (lowercase, used by the tool as args.<name>)' },
 		type: { type: 'string', enum: ['string', 'number', 'boolean'], description: 'value type' },
-		description: { type: 'string', description: 'what the argument means, the model reads it' }
+		description: { type: 'string', description: 'what the argument means, the model reads it' },
+		optional: { type: 'boolean', description: 'true = callers may omit it; it then arrives in your program as the empty default ("" / 0 / false)' }
 	},
 	required: ['name', 'type']
 } as const;

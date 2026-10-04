@@ -129,6 +129,29 @@ describe('manage_tool', () => {
 		expect(await runTool(tools, 'double_it', { n: 21 }, ctx)).toBe(42);
 	});
 
+	test('an argument only becomes optional on a real boolean true', async () => {
+		const { deps, tools } = makeDeps();
+		await fnNamed(deps, 'manage_tool').invoker({
+			action: 'create',
+			name: 'opt_flag',
+			description: 'x',
+			arguments: [
+				{ name: 'a', type: 'string', description: 'a real boolean makes it optional', optional: true },
+				{ name: 'b', type: 'number', description: 'a stray string must not flip it', optional: 'yes' }
+			],
+			body: 'return(args.a)'
+		});
+		const file = path.join(toolsDir, 'opt_flag.tl');
+		const raw = readFileSync(file, 'utf-8');
+		const header = JSON.parse(raw.slice(0, raw.indexOf('¤'))) as { arguments: { name: string; optional?: boolean }[] };
+		expect(header.arguments.find((a) => a.name === 'a')?.optional).toBe(true);
+		expect(header.arguments.find((a) => a.name === 'b')?.optional).toBeUndefined();
+		// b stayed required (string flag ignored), a is omitted and arrives as ''
+		const ctx: ToolContext = { config: deps.config, log: () => undefined };
+		await expect(runTool(tools, 'opt_flag', {}, ctx)).rejects.toThrow('Missing required argument: b');
+		expect(await runTool(tools, 'opt_flag', { b: 1 }, ctx)).toBe('');
+	});
+
 	test('the change lands in the audit trail', async () => {
 		const { deps } = makeDeps();
 		await fnNamed(deps, 'manage_tool').invoker({ action: 'create', name: 'audited_tool', description: 'x', body: 'return(1)' });

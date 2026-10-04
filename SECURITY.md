@@ -71,7 +71,13 @@
   `[docker].allowed_volume_paths` (paths are resolved first, so
   `/srv/../etc` cannot slide past the prefix check) and the container side
   must be an absolute path, so the llm can no longer mount `/etc` into a
-  container and cat it back. Published ports bind to `127.0.0.1` unless the
+  container and cat it back. AGENT VOLUMES take the other path: a volume id
+  resolves to `<fs.root>/.docker-vols/<id>`, the id must be a single path
+  segment (no slashes, no `..`, no leading dot) and the store is realpath'd
+  before joining, so neither `../` nor a symlinked store can point a mount at
+  the host; the directory is created by us before docker sees it (no
+  root-owned surprise, and no allowlist entry, because the sandbox jail is
+  the trust root). Published ports bind to `127.0.0.1` unless the
   operator sets `[docker].bind_address`, and that value must be loopback,
   private or an explicit `0.0.0.0`. `recreate`/`edit` now validate the whole
   replacement (image, ports, mounts, extra args, cap) BEFORE the old

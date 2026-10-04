@@ -41,7 +41,9 @@ Call it from Discord: `@bot !greet who=world`
 Every **enabled** tool is also handed to the model as a function (the header
 arguments become the JSON schema), and listed in its system prompt with those
 same arguments as the typed signature, so it knows what it can call instead of
-writing its own code. Switch a tool off in the dashboard and it disappears
+writing its own code. An argument flagged `"optional": true` is not required
+and reaches the program as its empty default (`""` / `0` / `false`). Switch a
+tool off in the dashboard and it disappears
 from both the prompt and the schema, and is refused on the next call.
 
 With `allow_tool_creation = true` (and `allow_skill_creation`) the agent also
@@ -208,6 +210,7 @@ Read [SECURITY.md](SECURITY.md). Short version: the interpreter is jailed
 (http allowlists, fs sandbox, no shell, hard execution limits), docker stays
 off unless `[docker].enabled = true` and every op is refused otherwise (when it
 is on: published ports bind to `127.0.0.1` unless you set `[docker].bind_address`,
-and host mounts need `[docker].allowed_volume_paths`), secrets
+and host mounts need `[docker].allowed_volume_paths` while agent volumes are
+jailed in `sandbox/.docker-vols/<volume_id>`), secrets
 live in env vars and are redacted from logs, and everything the agent does is
 audit-logged.

@@ -2,18 +2,18 @@
 /// Please see the LICENSE file for more information.
 // TooLang interpreter entry point
 
-import { readFileSync } from "node:fs";
-import { Lexer } from "./lexer.js";
-import { Parser } from "./parser.js";
-import { Evaluator, RuntimeError } from "./evaluator.js";
-import { resolveLimits, type InterpreterLimits } from "./limits.js";
-import { ToolDef } from "../llmproto/types.js";
-export type { Program, ToolHeader, Statement, Expr } from "./ast.js";
-export { ParseError } from "./parser.js";
-export { RuntimeError, TooLangError, type InterpreterContext } from "./evaluator.js";
-export { resolveLimits, type InterpreterLimits } from "./limits.js";
+import { readFileSync } from 'node:fs';
+import { Lexer } from './lexer.js';
+import { Parser } from './parser.js';
+import { Evaluator, RuntimeError } from './evaluator.js';
+import { resolveLimits, type InterpreterLimits } from './limits.js';
+import { ToolDef } from '../llmproto/types.js';
+export type { Program, ToolHeader, Statement, Expr } from './ast.js';
+export { ParseError } from './parser.js';
+export { RuntimeError, TooLangError, type InterpreterContext } from './evaluator.js';
+export { resolveLimits, type InterpreterLimits } from './limits.js';
 
-import type { InterpreterContext } from "./evaluator.js";
+import type { InterpreterContext } from './evaluator.js';
 
 export interface ToolResult {
 	success: boolean;
@@ -26,21 +26,21 @@ export interface ParsedTool {
 }
 
 export function parseToolFile(filePath: string): ParsedTool {
-	const raw = readFileSync(filePath, "utf-8");
+	const raw = readFileSync(filePath, 'utf-8');
 	return parseToolSource(raw);
 }
 export function parseToolSource(source: string): ParsedTool {
-	const delimIdx = source.indexOf("¤");
-	if (delimIdx === -1) throw new Error("TooLang source must contain a delimiter after the tool header");
+	const delimIdx = source.indexOf('¤');
+	if (delimIdx === -1) throw new Error('TooLang source must contain a delimiter after the tool header');
 
 	const jsonPart = source.slice(0, delimIdx).trim();
 	const codePart = source.slice(delimIdx + 1).trim();
 	const header = JSON.parse(jsonPart) as ToolDef;
-	return { header, code: codePart }
+	return { header, code: codePart };
 }
 
 export async function executeTool(filePath: string, args: Record<string, unknown>, ctx: InterpreterContext = {}): Promise<ToolResult> {
-	const raw = readFileSync(filePath, "utf-8");
+	const raw = readFileSync(filePath, 'utf-8');
 	return await executeToolSource(raw, args, ctx);
 }
 
@@ -48,13 +48,13 @@ export async function executeToolSource(source: string, args: Record<string, unk
 	try {
 		const { code } = parseToolSource(source);
 		const data = await runFromSource(code, args, ctx);
-		return { success: true, data }
+		return { success: true, data };
 	} catch (err) {
 		// cap the message: it is echoed back to the model, and a giant one would
 		// eat the request budget (or the whole context)
 		const msg = (err instanceof Error ? err.message : String(err)).slice(0, 2_000);
 		if (err instanceof RuntimeError || err instanceof Error) return { success: false, data: null, error: msg };
-		return { success: false, data: null, error: msg }
+		return { success: false, data: null, error: msg };
 	}
 }
 
@@ -65,7 +65,7 @@ export async function runFromSource(code: string, args: Record<string, unknown>,
 	const program = parser.parse();
 	const evaluator = new Evaluator({
 		...ctx,
-		limits: resolveLimits(ctx.limits),
+		limits: resolveLimits(ctx.limits)
 	});
 	return await evaluator.run(program, args);
 }
@@ -75,22 +75,39 @@ export function validateToolArgs(header: ToolDef, args: Record<string, unknown>)
 	for (const argDef of header.arguments) {
 		const val = args[argDef.name];
 		if (val === undefined || val === null) {
+			// optional args may be omitted: fillOptionalDefaults() gives them the
+			// type's empty default right after validation passes
+			if (argDef.optional === true) continue;
 			errors.push(`Missing required argument: ${argDef.name}`);
 			continue;
 		}
 		switch (argDef.type) {
-			case "string":
-				if (typeof val !== "string") errors.push(`Argument '${argDef.name}' must be a string, got ${typeof val}`);
+			case 'string':
+				if (typeof val !== 'string') errors.push(`Argument '${argDef.name}' must be a string, got ${typeof val}`);
 				break;
-			case "number":
-				if (typeof val !== "number") errors.push(`Argument '${argDef.name}' must be a number, got ${typeof val}`);
+			case 'number':
+				if (typeof val !== 'number') errors.push(`Argument '${argDef.name}' must be a number, got ${typeof val}`);
 				break;
-			case "boolean":
-				if (typeof val !== "boolean") errors.push(`Argument '${argDef.name}' must be a boolean, got ${typeof val}`);
+			case 'boolean':
+				if (typeof val !== 'boolean') errors.push(`Argument '${argDef.name}' must be a boolean, got ${typeof val}`);
 				break;
 		}
-		if (typeof val === "string" && argDef.disallow?.length > 0)
-			if (argDef.disallow.includes(val)) errors.push(`Argument '${argDef.name}' disallows value: '${val}'`);
+		if (typeof val === 'string' && argDef.disallow?.length > 0) if (argDef.disallow.includes(val)) errors.push(`Argument '${argDef.name}' disallows value: '${val}'`);
 	}
 	return errors;
+}
+
+/**
+ * Give every omitted OPTIONAL argument its type's empty default ('' / 0 /
+ * false), so a .tl body can rely on `args.volume == ""` instead of having no
+ * way to tell "absent" from "empty" (TooLang has no undefined literal).
+ */
+export function fillOptionalDefaults(header: ToolDef, args: Record<string, unknown>): Record<string, unknown> {
+	const out = { ...args };
+	for (const argDef of header.arguments) {
+		if (argDef.optional !== true) continue;
+		if (out[argDef.name] !== undefined && out[argDef.name] !== null) continue;
+		out[argDef.name] = argDef.type === 'number' ? 0 : argDef.type === 'boolean' ? false : '';
+	}
+	return out;
 }

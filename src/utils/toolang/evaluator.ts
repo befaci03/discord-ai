@@ -495,7 +495,8 @@ export class Evaluator {
 					maxContainers: typeof raw.maxContainers === 'number' ? raw.maxContainers : 100,
 					defaultImage: typeof raw.defaultImage === 'string' ? raw.defaultImage : 'debian:bookworm',
 					allowedVolumePaths: Array.isArray(raw.allowedVolumePaths) ? raw.allowedVolumePaths.map(String) : undefined,
-					bindAddress: typeof raw.bindAddress === 'string' ? raw.bindAddress : undefined
+					bindAddress: typeof raw.bindAddress === 'string' ? raw.bindAddress : undefined,
+					volumeRoot: typeof raw.volumeRoot === 'string' && raw.volumeRoot.length > 0 ? raw.volumeRoot : undefined
 				};
 			})
 		);

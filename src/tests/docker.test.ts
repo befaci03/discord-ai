@@ -1,7 +1,11 @@
 // Docker builtin: the enabled gate must hold for every op, paths must never
 // reach a shell string unchecked, and image/port policy runs before any CLI.
+// Agent volumes live in <volumeRoot>/<volume_id> (sandbox/.docker-vols).
 
 import { describe, test, expect } from 'bun:test';
+import { mkdtempSync, statSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
 import { Docker, DockerPolicy } from '../utils/toolang/builtins/docker.js';
 
 function policy(over: Partial<DockerPolicy> = {}): DockerPolicy {
@@ -47,7 +51,8 @@ describe('docker enabled gate', () => {
 			['lsdir', () => d.lsdir('web', '/tmp')],
 			['mvdir', () => d.mvdir('web', '/tmp/a', '/tmp/b')],
 			['recreate', () => d.recreate('web')],
-			['edit', () => d.edit('web', { image: 'nginx:alpine' })]
+			['edit', () => d.edit('web', { image: 'nginx:alpine' })],
+			['attach', () => d.attach('web', 'data', '/data')]
 		];
 		for (const [op, call] of ops) {
 			const err = errorOf(call);
@@ -118,6 +123,69 @@ describe('host mounts and publish policy', () => {
 		expect(errorOf(() => Docker(() => policy({ enabled: true, bindAddress: '8.8.8.8' })).create('web', { image: 'nginx:alpine', ports: [3456] }))).toContain('bind_address');
 		expect(errorOf(() => Docker(() => policy({ enabled: true, bindAddress: '0.0.0.0' })).create('web', { image: 'ftp', ports: [3456] }))).toContain('disallowed');
 		expect(errorOf(() => Docker(() => policy({ enabled: true })).create('web', { image: 'ftp', ports: [3456] }))).toContain('disallowed');
+	});
+});
+
+describe('agent volumes (.docker-vols)', () => {
+	/** a fresh store per test: the repo's sandbox must stay untouched */
+	function storeDir(): string {
+		return mkdtempSync(path.join(tmpdir(), 'volstore-'));
+	}
+	const drop = (dir: string) => rmSync(dir, { recursive: true, force: true });
+
+	test('a volume id resolves into the store and needs no allowlist entry', () => {
+		const store = storeDir();
+		const d = Docker(() => policy({ enabled: true, volumeRoot: store }));
+		// the volume check runs before the image check: the denylisted image
+		// proves the mount itself was accepted (and no allowed_volume_paths!)
+		const err = errorOf(() => d.create('web', { image: 'ftp', volumes: [{ volume: 'data', container: '/var/lib/data' }] }));
+		expect(err).toContain('disallowed');
+		// the store dir now exists on disk, owned by us, not root-created by docker
+		expect(statSync(path.join(store, 'data')).isDirectory()).toBe(true);
+		drop(store);
+	});
+
+	test('volume ids stay a single path segment', () => {
+		const store = storeDir();
+		const d = Docker(() => policy({ enabled: true, volumeRoot: store }));
+		const bad = ['../etc', 'a/b', '.hidden', '', '..', 'with space', 'x'.repeat(65)];
+		for (const id of bad) {
+			const err = errorOf(() => d.create('web', { image: 'nginx:alpine', volumes: [{ volume: id, container: '/data' }] }));
+			expect(err, `volume id '${id.slice(0, 20)}' must be refused`).toContain('invalid volume id');
+		}
+		drop(store);
+	});
+
+	test('without a store configured, agent volumes are refused', () => {
+		const d = Docker(() => policy({ enabled: true }));
+		const err = errorOf(() => d.create('web', { image: 'nginx:alpine', volumes: [{ volume: 'data', container: '/data' }] }));
+		expect(err).toContain('unavailable');
+	});
+
+	test('binds inside the store survive re-validation without an allowlist', () => {
+		const store = storeDir();
+		const d = Docker(() => policy({ enabled: true, volumeRoot: store, allowedVolumePaths: [] }));
+		// this is exactly what recreate/attach feed back from docker inspect:
+		// the mount WE created must not need an allowed_volume_paths entry
+		expect(errorOf(() => d.create('web', { image: 'ftp', volumes: [{ host: path.join(store, 'data'), container: '/data' }] }))).toContain('disallowed');
+		// ...while an arbitrary host path outside the store still dies
+		expect(errorOf(() => d.create('web', { image: 'ftp', volumes: [{ host: '/etc', container: '/data' }] }))).toContain('allowed_volume_paths');
+		drop(store);
+	});
+
+	test('attach validates everything before docker is touched', () => {
+		const store = storeDir();
+		const d = Docker(() => policy({ enabled: true, volumeRoot: store }));
+		expect(errorOf(() => d.attach('web', '../etc', '/data'))).toContain('invalid volume id');
+		expect(errorOf(() => d.attach('web', '', '/data'))).toContain('invalid volume id');
+		expect(errorOf(() => d.attach('web', 'data', 'relative/path'))).toContain('absolute');
+		expect(errorOf(() => d.attach('web', 'data', '/data/../x'))).toContain('absolute');
+		// no store at all: refused before any docker call
+		expect(errorOf(() => Docker(() => policy({ enabled: true })).attach('web', 'data', '/data'))).toContain('unavailable');
+		// good inputs reach `docker inspect`, which fails here (no docker/daemon)
+		// with a message that says which container could not be read
+		expect(errorOf(() => d.attach('web', 'data', '/data'))).toContain('could not read the image');
+		drop(store);
 	});
 });
 

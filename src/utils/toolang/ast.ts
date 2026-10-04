@@ -7,10 +7,12 @@ export interface ToolHeader {
 	arguments: ToolArg[];
 }
 export interface ToolArg {
-	type: "string" | "number" | "boolean";
+	type: 'string' | 'number' | 'boolean';
 	name: string;
 	description: string;
 	disallow: string[];
+	/** true = the caller may omit it; it arrives as '' / 0 / false */
+	optional?: boolean;
 }
 export interface Program {
 	header: ToolHeader;
@@ -37,159 +39,147 @@ export type Expr =
 	| ObjectLiteral;
 
 export interface StringLiteral {
-	kind: "string";
+	kind: 'string';
 	value: string;
 }
 export interface NumberLiteral {
-	kind: "number";
+	kind: 'number';
 	value: number;
 }
 export interface BooleanLiteral {
-	kind: "boolean";
+	kind: 'boolean';
 	value: boolean;
 }
 export interface NullLiteral {
-	kind: "null";
+	kind: 'null';
 }
 export interface UndefinedLiteral {
-	kind: "undefined";
+	kind: 'undefined';
 }
 
 export interface TemplateLiteral {
-	kind: "template";
+	kind: 'template';
 	value: string; // raw text with ${expr} holes
 }
 export interface Identifier {
-	kind: "identifier";
+	kind: 'identifier';
 	name: string;
 }
 export interface BinaryExpr {
-	kind: "binary";
+	kind: 'binary';
 	op: string;
 	left: Expr;
 	right: Expr;
 }
 export interface UnaryExpr {
-	kind: "unary";
+	kind: 'unary';
 	op: string;
 	operand: Expr;
 }
 export interface LogicalExpr {
-	kind: "logical";
-	op: "&&" | "||";
+	kind: 'logical';
+	op: '&&' | '||';
 	left: Expr;
 	right: Expr;
 }
 export interface AssignmentExpr {
-	kind: "assignment";
-	op: "=" | "+=" | "-=" | "*=" | "/=" | "%=";
+	kind: 'assignment';
+	op: '=' | '+=' | '-=' | '*=' | '/=' | '%=';
 	target: Expr; // identifier, member or index
 	value: Expr;
 }
 
 export interface MemberAccess {
-	kind: "member";
+	kind: 'member';
 	object: Expr;
 	property: string;
 }
 export interface IndexAccess {
-	kind: "index";
+	kind: 'index';
 	object: Expr;
 	index: Expr;
 }
 
 export interface MethodCall {
-	kind: "method_call";
+	kind: 'method_call';
 	object: Expr;
 	method: string;
 	args: Expr[];
 }
 export interface FunctionCall {
-	kind: "call";
+	kind: 'call';
 	name: Expr;
 	args: Expr[];
 }
 
 export interface ArrayLiteral {
-	kind: "array";
+	kind: 'array';
 	elements: Expr[];
 }
 export interface ObjectLiteral {
-	kind: "object";
+	kind: 'object';
 	properties: { key: string; value: Expr }[];
 }
 
-export type Statement =
-	| VarDecl
-	| FnDef
-	| ReturnStmt
-	| CallStmt
-	| WhileLoop
-	| ForInLoop
-	| IfStmt
-	| BreakStmt
-	| ContinueStmt
-	| TryStmt
-	| ThrowStmt
-	| ExprStmt;
+export type Statement = VarDecl | FnDef | ReturnStmt | CallStmt | WhileLoop | ForInLoop | IfStmt | BreakStmt | ContinueStmt | TryStmt | ThrowStmt | ExprStmt;
 
 export interface VarDecl {
-	kind: "var";
+	kind: 'var';
 	name: string;
 	value: Expr;
 }
 
 export interface FnDef {
-	kind: "fn";
+	kind: 'fn';
 	name: string;
 	params: { name: string; type: string }[];
 	body: Statement[];
 }
 
 export interface ReturnStmt {
-	kind: "return";
+	kind: 'return';
 	value: Expr | null;
 }
 export interface CallStmt {
-	kind: "call";
+	kind: 'call';
 	name: Expr;
 	args: Expr[];
 }
 export interface IfStmt {
-	kind: "if";
+	kind: 'if';
 	condition: Expr;
 	thenBody: Statement[];
 	elifs: { condition: Expr; body: Statement[] }[];
 	elseBody: Statement[] | null;
 }
 export interface WhileLoop {
-	kind: "while";
+	kind: 'while';
 	condition: Expr;
 	body: Statement[];
 }
 export interface ForInLoop {
-	kind: "for";
+	kind: 'for';
 	varName: string;
 	iterable: Expr;
 	body: Statement[];
 }
 export interface BreakStmt {
-	kind: "break";
+	kind: 'break';
 }
 export interface ContinueStmt {
-	kind: "continue";
+	kind: 'continue';
 }
 export interface TryStmt {
-	kind: "try";
+	kind: 'try';
 	body: Statement[];
 	catchVar: string | null;
 	catchBody: Statement[] | null;
 }
 export interface ThrowStmt {
-	kind: "throw";
+	kind: 'throw';
 	value: Expr;
 }
 export interface ExprStmt {
-	kind: "expr_stmt";
+	kind: 'expr_stmt';
 	expr: Expr;
 }

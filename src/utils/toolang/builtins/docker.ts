@@ -5,6 +5,7 @@
 // through validation before touching the CLI. fuck docker but better than hell lmao
 
 import { execFileSync } from 'node:child_process';
+import { mkdirSync, realpathSync } from 'node:fs';
 import * as path from 'node:path';
 import { RuntimeError } from '../evaluator.js';
 
@@ -24,6 +25,12 @@ export interface DockerPolicy {
 	allowedVolumePaths?: string[];
 	/** interface published ports bind to (default 127.0.0.1 = this box only) */
 	bindAddress?: string;
+	/**
+	 * store behind agent volumes: <sandbox>/.docker-vols. A volume id becomes
+	 * <volumeRoot>/<id>, jailed in there and allowed WITHOUT an
+	 * allowed_volume_paths entry (the sandbox is the trust root).
+	 */
+	volumeRoot?: string;
 }
 
 function drun(cmdArgs: string[], host?: string, input?: string): { stdout: string; stderr: string; exitCode: number } {
@@ -115,6 +122,85 @@ function checkPath(p: unknown, op: string): string {
 
 /** Destination inside the container: absolute, same charset as checkPath. */
 const CONTAINER_PATH_RE = /^\/[A-Za-z0-9_./-]*$/;
+
+/** Container mount point: absolute, no `..`, same charset as checkPath. */
+function checkContainerPath(container: unknown, op: string): string {
+	const c = String(container ?? '');
+	if (c.length === 0 || c.length > 1000 || !CONTAINER_PATH_RE.test(c) || c.includes('..')) {
+		throw new RuntimeError(`docker.${op}: container path '${c.slice(0, 60)}' must be absolute (letters, digits, _ . - / only, no '..')`);
+	}
+	return c;
+}
+
+/** Volume ids are ONE path segment: no slashes, no leading dot (so no `..`). */
+const VOLUME_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+
+/**
+ * Resolve an agent volume id to `<volumeRoot>/<volume_id>` (the sandbox's
+ * .docker-vols store) and make sure the directory exists, so docker does not
+ * create it root-owned behind our back. The id is a single path segment by
+ * construction and the store is realpath'd before joining, so neither `../`
+ * nor a symlinked store can aim this mount at the host.
+ */
+function resolveAgentVolume(idRaw: unknown, policy: DockerPolicy, op: string): string {
+	const id = String(idRaw ?? '');
+	if (!VOLUME_ID_RE.test(id)) {
+		throw new RuntimeError(`docker.${op}: invalid volume id '${id.slice(0, 40)}' (letters, digits, _ . - and dots, 1..64 chars, no slashes)`);
+	}
+	const root = typeof policy.volumeRoot === 'string' ? policy.volumeRoot.trim() : '';
+	if (!root) {
+		throw new RuntimeError(`docker.${op}: agent volumes are unavailable (no .docker-vols root configured)`);
+	}
+	try {
+		mkdirSync(root, { recursive: true });
+		const realRoot = realpathSync(root);
+		const dir = path.join(realRoot, id);
+		if (!dir.startsWith(realRoot + path.sep)) throw new Error('volume escaped its store');
+		mkdirSync(dir, { recursive: true });
+		return dir;
+	} catch (err) {
+		throw new RuntimeError(`docker.${op}: could not prepare volume '${id}': ${(err as Error).message}`);
+	}
+}
+
+/**
+ * One `-v host:container` bind. Two forms:
+ * - `{ volume, container }`: an agent volume id, resolved into
+ *   <volumeRoot>/<id>. Jailed in the sandbox store, so no allowlist entry.
+ * - `{ host, container }`: a real host path. The host side is the dangerous
+ *   one: without an allowlist the llm could mount /etc (or the whole disk)
+ *   into a container and read it back through docker.get_file_content. So:
+ *   resolve the path, then demand it sits inside
+ *   [docker].allowed_volume_paths OR inside the .docker-vols store (binds
+ *   THIS code created must survive recreate/edit re-validation).
+ */
+function checkVolumeBind(v: { host?: unknown; container?: unknown; volume?: unknown }, policy: DockerPolicy, op: string): string {
+	if (!v || typeof v.container !== 'string') {
+		throw new RuntimeError(`docker.${op}: volume entries need a container path and either a volume id or a host path`);
+	}
+	const container = checkContainerPath(v.container, op);
+	// agent volume: id -> <sandbox>/.docker-vols/<id>, created on the spot.
+	// A GIVEN volume key is always validated (an empty id says "invalid volume
+	// id", not "no volume given"), and whatever it resolves to stays jailed
+	if (v.volume !== undefined && v.volume !== null) {
+		return `${resolveAgentVolume(v.volume, policy, op)}:${container}`;
+	}
+	if (typeof v.host !== 'string') {
+		throw new RuntimeError(`docker.${op}: volume entries need a host path or a volume id (plus the container path)`);
+	}
+	// resolve first, so a /data/../etc trick cannot slide past the prefix check
+	const host = path.resolve(v.host);
+	const roots = (policy.allowedVolumePaths ?? []).map((r) => path.resolve(String(r)));
+	if (roots.some((root) => host === root || host.startsWith(root + path.sep))) return `${host}:${container}`;
+	// our own store: recreate/edit read these binds back from docker inspect
+	const store = typeof policy.volumeRoot === 'string' && policy.volumeRoot ? path.resolve(policy.volumeRoot) : '';
+	if (store && (host === store || host.startsWith(store + path.sep))) return `${host}:${container}`;
+	throw new RuntimeError(
+		roots.length > 0
+			? `docker.${op}: host path '${host.slice(0, 80)}' is outside [docker].allowed_volume_paths`
+			: `docker.${op}: host mounts are refused (set [docker].allowed_volume_paths to the paths the llm may mount, or pass a volume id: it resolves to sandbox/.docker-vols/<id>)`
+	);
+}
 /**
  * Interfaces a published port may bind to. Loopback and private ranges only:
  * 0.0.0.0 has to be asked for explicitly (see [docker].bind_address), because
@@ -131,39 +217,19 @@ function checkBind(policy: DockerPolicy, op: string): string {
 	return bind;
 }
 
-/**
- * One `-v host:container` bind. The host side is the dangerous one: without
- * an allowlist the llm could mount /etc (or the whole disk) into a container
- * and read it back through docker.get_file_content. So: resolve the path, then
- * demand it sits inside [docker].allowed_volume_paths.
- */
-function checkVolumeBind(v: { host?: unknown; container?: unknown }, policy: DockerPolicy, op: string): string {
-	if (typeof v?.host !== 'string' || typeof v?.container !== 'string') {
-		throw new RuntimeError(`docker.${op}: volume entries need host and container paths`);
-	}
-	const container = v.container;
-	if (container.length === 0 || container.length > 1000 || !CONTAINER_PATH_RE.test(container) || container.includes('..')) {
-		throw new RuntimeError(`docker.${op}: container path '${container.slice(0, 60)}' must be absolute (letters, digits, _ . - / only, no '..')`);
-	}
-	// resolve first, so a /data/../etc trick cannot slide past the prefix check
-	const host = path.resolve(v.host);
-	const roots = (policy.allowedVolumePaths ?? []).map((r) => path.resolve(String(r)));
-	const inside = roots.some((root) => host === root || host.startsWith(root + path.sep));
-	if (!inside) {
-		throw new RuntimeError(
-			roots.length > 0
-				? `docker.${op}: host path '${host.slice(0, 80)}' is outside [docker].allowed_volume_paths`
-				: `docker.${op}: host mounts are refused (set [docker].allowed_volume_paths to the paths the llm may mount, e.g. ["${host.slice(0, 80)}"])`
-		);
-	}
-	return `${host}:${container}`;
+/** One `-v host:container` entry of docker.create/edit/recreate. */
+interface DockerVolumeBind {
+	host?: string;
+	container: string;
+	/** agent volume id: resolved to <volumeRoot>/<id> instead of a host path */
+	volume?: string;
 }
 
 interface DockerConfig {
 	memory?: string;
 	cpu?: number;
 	ports?: number[];
-	volumes?: { host: string; container: string }[];
+	volumes?: DockerVolumeBind[];
 	additional_args?: string[];
 	image?: string;
 }
@@ -240,6 +306,78 @@ export function Docker(getPolicy: () => DockerPolicy): Record<string, Function> 
 		const policy = gate(op ?? String(args[0] ?? 'run'));
 		return drun(args, policy.host);
 	};
+
+	/**
+	 * Read an existing container's create config back from `docker inspect`
+	 * (image, ports, memory, cpus, binds). Shared by recreate and attach.
+	 * `docker inspect` nests everything under Config/HostConfig: reading
+	 * top-level keys used to return undefined and silently recreate the
+	 * container from the DEFAULT image with no ports.
+	 */
+	const inspectConfig = (op: string, name: string): DockerConfig => {
+		const raw = d(['inspect', name, '--format={{json .}}'], op);
+		let config: DockerConfig = {};
+		try {
+			const info = JSON.parse(raw.stdout) as {
+				Config?: { Image?: string };
+				HostConfig?: {
+					Memory?: number;
+					NanoCpus?: number;
+					PortBindings?: Record<string, { HostPort?: string }[]>;
+					Binds?: string[];
+				};
+			};
+			const ports = new Set<number>();
+			for (const bindings of Object.values(info.HostConfig?.PortBindings ?? {})) {
+				for (const b of bindings ?? []) {
+					const p = Number(b?.HostPort);
+					if (Number.isInteger(p) && p > 0) ports.add(p);
+				}
+			}
+			config = {
+				image: info.Config?.Image,
+				ports: [...ports],
+				memory: info.HostConfig?.Memory ? `${Math.max(1, Math.round(info.HostConfig.Memory / 1024 / 1024))}m` : undefined,
+				cpu: info.HostConfig?.NanoCpus ? info.HostConfig.NanoCpus / 1e9 : undefined,
+				volumes: (info.HostConfig?.Binds ?? [])
+					.map((bind) => {
+						const [host, target] = bind.split(':');
+						return { host, container: target };
+					})
+					.filter((v) => Boolean(v.host) && Boolean(v.container))
+			};
+		} catch {
+			/* keep empty: the image check below reports it */
+		}
+		if (!config.image) {
+			// stderr tells "no such container" from "docker not running"
+			const detail = raw.stderr ? `: ${raw.stderr.slice(0, 120)}` : '';
+			throw new RuntimeError(`docker.${op}: could not read the image of '${name}' from docker inspect${detail}`);
+		}
+		return config;
+	};
+
+	/**
+	 * The replace flow shared by recreate/edit/attach. The caller already ran
+	 * buildCreateArgs (the WHOLE create is validated), so here we only count,
+	 * swap and bring it back up: stop -> rm -> create -> start. Without the
+	 * final start a "recreated" container came back dead, which nobody asked for.
+	 */
+	const replace = (op: string, name: string, args: string[]): { stdout: string; stderr: string; exitCode: number } => {
+		const policy = gate(op);
+		const existing = d(['ps', '-a', '-q'], op)
+			.stdout.split('\n')
+			.filter((s) => s.length > 0).length;
+		// the container being replaced counts in `existing` and is about to be
+		// removed, so the cap only breaks when it is already ABOVE the limit
+		if (existing > (policy.maxContainers ?? 100)) throw new RuntimeError(`docker.${op}: container limit reached (${policy.maxContainers})`);
+		d(['stop', name], op);
+		d(['rm', name], op);
+		const made = d(args, op);
+		if (made.exitCode !== 0) return made;
+		return d(['start', name], op);
+	};
+
 	return {
 		// read-only overview: name, image and status of every container
 		list: () => d(['ps', '-a', '--format', '{{.Names}}\t{{.Image}}\t{{.Status}}'], 'list'),
@@ -305,59 +443,12 @@ export function Docker(getPolicy: () => DockerPolicy): Record<string, Function> 
 		recreate: (container: string) => {
 			const policy = gate('recreate');
 			const name = checkName(container, 'recreate');
-			const raw = d(['inspect', name, '--format={{json .}}'], 'recreate');
-			// `docker inspect` nests everything (Config/HostConfig): the old code
-			// read top-level keys, always got undefined and silently recreated
-			// the container from the DEFAULT image with no ports
-			let config: DockerConfig = {};
-			try {
-				const info = JSON.parse(raw.stdout) as {
-					Config?: { Image?: string };
-					HostConfig?: {
-						Memory?: number;
-						NanoCpus?: number;
-						PortBindings?: Record<string, { HostPort?: string }[]>;
-						Binds?: string[];
-					};
-				};
-				const ports = new Set<number>();
-				for (const bindings of Object.values(info.HostConfig?.PortBindings ?? {})) {
-					for (const b of bindings ?? []) {
-						const p = Number(b?.HostPort);
-						if (Number.isInteger(p) && p > 0) ports.add(p);
-					}
-				}
-				config = {
-					image: info.Config?.Image,
-					ports: [...ports],
-					memory: info.HostConfig?.Memory ? `${Math.max(1, Math.round(info.HostConfig.Memory / 1024 / 1024))}m` : undefined,
-					cpu: info.HostConfig?.NanoCpus ? info.HostConfig.NanoCpus / 1e9 : undefined,
-					volumes: (info.HostConfig?.Binds ?? [])
-						.map((bind) => {
-							const [host, target] = bind.split(':');
-							return { host, container: target };
-						})
-						.filter((v) => Boolean(v.host) && Boolean(v.container))
-				};
-			} catch {
-				/* keep empty: buildCreateArgs falls back to defaultImage below */
-			}
-			if (!config.image) {
-				throw new RuntimeError(`docker.recreate: could not read the image of '${name}' from docker inspect`);
-			}
-			// validate the WHOLE create (image, ports, volumes, extra args) and the
-			// cap BEFORE anything is destroyed: a refused port must not cost the
+			const config = inspectConfig('recreate', name);
+			// validate the WHOLE create (image, ports, volumes, extra args)
+			// BEFORE anything is destroyed: a refused port must not cost the
 			// operator their container
 			const args = buildCreateArgs(name, config, policy, 'recreate');
-			const existing = d(['ps', '-a', '-q'], 'recreate')
-				.stdout.split('\n')
-				.filter((s) => s.length > 0).length;
-			// this container is part of `existing` and is about to be replaced, so
-			// the count only breaks the cap when it is already ABOVE it
-			if (existing > (policy.maxContainers ?? 100)) throw new RuntimeError(`docker.recreate: container limit reached (${policy.maxContainers})`);
-			d(['stop', name], 'recreate');
-			d(['rm', name], 'recreate');
-			return d(args, 'recreate');
+			return replace('recreate', name, args);
 		},
 
 		edit: (container: string, config: DockerConfig) => {
@@ -366,15 +457,31 @@ export function Docker(getPolicy: () => DockerPolicy): Record<string, Function> 
 			if (config?.image) {
 				// same rule as recreate: nothing dies until every check passed
 				const args = buildCreateArgs(name, config, policy, 'edit');
-				const existing = d(['ps', '-a', '-q'], 'edit')
-					.stdout.split('\n')
-					.filter((s) => s.length > 0).length;
-				if (existing >= (policy.maxContainers ?? 100)) throw new RuntimeError(`docker.edit: container limit reached (${policy.maxContainers})`);
-				d(['stop', name], 'edit');
-				d(['rm', name], 'edit');
-				return d(args, 'edit');
+				return replace('edit', name, args);
 			}
 			return { message: 'edit without image replacement not fully supported' };
+		},
+
+		/**
+		 * Mount an AGENT VOLUME (<sandbox>/.docker-vols/<id>) into an EXISTING
+		 * container: read its config back, add the bind, then the same
+		 * validate-before-destroy replace flow as recreate, finished with a
+		 * start so the container comes back up with the volume attached.
+		 */
+		attach: (container: string, volume: string, containerPath: string) => {
+			const policy = gate('attach');
+			const name = checkName(container, 'attach');
+			const target = checkContainerPath(containerPath, 'attach');
+			// fail fast: a bad volume id dies here, before docker is called at all
+			resolveAgentVolume(volume, policy, 'attach');
+			const config = inspectConfig('attach', name);
+			const existing = config.volumes ?? [];
+			if (existing.some((b) => b.container === target)) {
+				throw new RuntimeError(`docker.attach: '${name}' already has a mount at '${target}'`);
+			}
+			config.volumes = [...existing, { volume, container: target }];
+			const args = buildCreateArgs(name, config, policy, 'attach');
+			return replace('attach', name, args);
 		}
 	};
 }

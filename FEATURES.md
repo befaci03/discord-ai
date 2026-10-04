@@ -37,7 +37,7 @@ has a JSON tool header, then a `¤` delimiter, then the program body.
 | `node` | `child_proc.run` with command denylist/allowlist and no shell, bcrypt helpers |
 | `Array` | slice, push, length, range, repeat |
 | `Object` | keys/values/entries/fromEntries/merge/freeze |
-| `docker` | container lifecycle behind image/port allowlists and name validation, plus `docker.list()` (name/image/status of every container). Every op is refused unless `[docker].enabled = true`, honors `docker.host` and `max_containers`. Published ports bind to `[docker].bind_address` (default `127.0.0.1`; loopback/private/`0.0.0.0` only), host bind-mounts need `[docker].allowed_volume_paths` (empty = no mounts at all) |
+| `docker` | container lifecycle behind image/port allowlists and name validation, plus `docker.list()` (name/image/status of every container). Every op is refused unless `[docker].enabled = true`, honors `docker.host` and `max_containers`. Published ports bind to `[docker].bind_address` (default `127.0.0.1`; loopback/private/`0.0.0.0` only), host bind-mounts need `[docker].allowed_volume_paths` (empty = no mounts at all), agent volumes mount from `<fs.root>/.docker-vols/<volume_id>` with no allowlist entry (`docker.attach` mounts one into an existing container) |
 | `discord` | messages, embeds, reactions, polls, channels, roles, members, events (needs a client) |
 | `agent` | text/image/audio/video generation, transcription (needs an agent) |
 | `sys` | read-only host info (hostname, mem, cpus); env lookups by exact name only |
@@ -54,10 +54,14 @@ Methods on values: strings (30+), numbers (14), arrays (20+), objects (9).
 - runtime guard: unknown tools, invalid args, timeouts and errors are all
   reported without leaking internals
 - premade tools: `web_search`, `fetch_json`, `server_stats`, `sandbox_write`,
-  and the docker family `docker_list`, `docker_exec`, `docker_create`,
-  `docker_manage` (all no-ops unless `[docker].enabled = true`)
+  and the docker family `docker_list`, `docker_exec`, `docker_create`
+  (optional `volume`/`volume_path` args mount a sandbox volume at create
+  time), `docker_manage` (start/stop/restart/remove/recreate + `mount`, which
+  mounts a sandbox volume into an existing container by recreating it)
+  (all no-ops unless `[docker].enabled = true`)
 - every enabled tool is ALSO offered to the model as a function: header
-  arguments become the JSON schema (all required, `disallow` values surfaced
+  arguments become the JSON schema (required unless marked `optional`,
+  `disallow` values surfaced
   in the description). The registry re-checks the enabled flag at call time,
   so a dashboard toggle hides a tool from the model and refuses the very next
   call. Each model-driven run is recorded like the `!tool` path, with `agent`
@@ -287,7 +291,9 @@ authentication and live updates:
   `--pid`, `--network`, `--device`, `--volumes-from`, ...), a refusal of
   `--env-file` and bare `-e NAME` (the docker CLI would copy host env vars
   into the container), and a volume allowlist
-  (`[docker].allowed_volume_paths`) so the llm cannot mount the host disk
+  (`[docker].allowed_volume_paths`) so the llm cannot mount the host disk,
+  while agent volume ids are jailed in `<fs.root>/.docker-vols/<id>` (single
+  path segment, realpath'd store, created by us before docker sees it)
 - secrets from env, redacted in logs
 - audit logging of tool runs and security-relevant mutations (addon calls,
   manage_tool/manage_skill writes, tunnel routes, cron add/remove/fire)
@@ -310,6 +316,7 @@ authentication and live updates:
   `[docker].enabled` is false, images go through the allow/deny lists before
   they reach the CLI, ports are range-checked and `max_containers` is enforced
   before a create, published ports bind to loopback unless the operator sets
-  `bind_address`, host mounts need `allowed_volume_paths`, env flags cannot
+  `bind_address`, host mounts need `allowed_volume_paths` (agent volume ids
+  mount from the sandboxed `.docker-vols` store instead), env flags cannot
   copy host secrets into a container, and `recreate`/`edit` validate the full
   replacement BEFORE the old container is stopped and removed

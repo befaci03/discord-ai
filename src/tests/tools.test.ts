@@ -9,6 +9,8 @@ import { loadConfig, resetConfigCache, AppConfig } from '../utils/config.js';
 import { ToolRegistry, runTool } from '../modules/tools.js';
 import { ToolContext } from '../modules/types.js';
 import { buildAgent, llmAvailable, registryToAgentTools, readPromptFile } from '../agent/factory.js';
+import { validateToolArgs, fillOptionalDefaults, parseToolSource } from '../utils/toolang/index.js';
+import type { ToolDef } from '../utils/llmproto/types.js';
 import SQLiteDB from '../db/sqlite.js';
 import { Logger } from '../utils/logger.js';
 
@@ -65,6 +67,21 @@ describe('LLM exposure', () => {
 		// a tool with several header args keeps them all required
 		const write = defs.find((d) => d.name === 'sandbox_write');
 		expect((write?.parameters?.required ?? []) as string[]).toEqual(['path', 'content', 'append']);
+	});
+
+	test("optional header args stay out of the schema's required list", () => {
+		// docker tools are hidden while docker is off: turn it on for this check
+		config.docker.enabled = true;
+		const defs = registryToAgentTools(registry, ctx, db);
+		// docker_manage's volume args are optional: the model must NOT be forced
+		// to pass them for a plain start/stop
+		const manage = defs.find((d) => d.name === 'docker_manage');
+		expect(manage?.parameters?.required).toEqual(['container', 'action']);
+		const props = (manage?.parameters?.properties ?? {}) as Record<string, unknown>;
+		expect(props.volume).toBeDefined();
+		expect(props.volume_path).toBeDefined();
+		const create = defs.find((d) => d.name === 'docker_create');
+		expect(create?.parameters?.required).toEqual(['name', 'image', 'port']);
 	});
 
 	test('docker tools are hidden while [docker].enabled is false', () => {
@@ -205,5 +222,40 @@ describe('persona file cap', () => {
 		expect(readPromptFile(file, 24_000, log)).toBe('short persona');
 		// a missing file is not an error: the bot runs without one
 		expect(readPromptFile(path.join(dir, 'nope.txt'), 24_000, log)).toBe('');
+	});
+});
+
+describe('optional header args', () => {
+	const header: ToolDef = {
+		name: 'opt_demo',
+		description: '',
+		arguments: [
+			{ type: 'string', name: 'req', description: '', disallow: [] },
+			{ type: 'string', name: 'opt', description: '', disallow: [], optional: true },
+			{ type: 'number', name: 'n', description: '', disallow: [], optional: true },
+			{ type: 'boolean', name: 'b', description: '', disallow: [], optional: true }
+		]
+	};
+
+	test('omitted required args still fail, omitted optional ones do not', () => {
+		expect(validateToolArgs(header, { req: 'a' })).toEqual([]);
+		expect(validateToolArgs(header, {})).toEqual(['Missing required argument: req']);
+		// provided values are type-checked exactly like required ones
+		expect(validateToolArgs(header, { req: 'a', n: 'nope' })).toEqual(["Argument 'n' must be a number, got string"]);
+	});
+
+	test('the body sees the type empty default instead of undefined', () => {
+		// TooLang has no undefined literal: '' / 0 / false is what a .tl script
+		// can actually compare against (args.volume == "")
+		expect(fillOptionalDefaults(header, { req: 'a' })).toEqual({ req: 'a', opt: '', n: 0, b: false });
+		// values the caller did pass are never overwritten
+		expect(fillOptionalDefaults(header, { req: 'a', opt: 'x', n: 5, b: true })).toEqual({ req: 'a', opt: 'x', n: 5, b: true });
+	});
+
+	test('the parser keeps the optional flag on a header', () => {
+		const src = `{"name":"t","description":"d","arguments":[{"type":"string","name":"opt","description":"x","disallow":[],"optional":true}]}\u00a4\n\nreturn(1)`;
+		const parsed = parseToolSource(src);
+		expect(parsed.header.arguments[0].optional).toBe(true);
+		expect(parsed.code.trim()).toBe('return(1)');
 	});
 });

@@ -85,7 +85,9 @@ math.PI
 
 docker.run("container", "cmd")
 --= json can only be on one line
-docker.create("container_name", "image:here", { memory: "2G", cpu: 150, ports: [8080], volumes: [{ host: "", container: "" }], additional_args: [] })
+docker.create("container_name", "image:here", { memory: "2G", cpu: 150, ports: [8080], volumes: [{ volume: "webdata", container: "/data" }], additional_args: [] })
+--= volume ids resolve to sandbox/.docker-vols/<id>; { host: "/path", container: "/data" } needs allowed_volume_paths
+docker.attach("container_name", "webdata", "/data") --= mount a volume into an existing container, then start it
 docker.recreate("container")
 docker.edit("container", { memory: "2G", cpu: 150, ports: [8080], volumes: [{ host: "", container: "" }], additional_args: [] })
 --= will recreate the container if a docker image is provided

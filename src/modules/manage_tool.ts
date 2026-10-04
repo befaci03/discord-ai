@@ -45,6 +45,7 @@ function normArgDefs(raw: unknown): ArgDef[] {
 		let type: string;
 		let description: string;
 		let disallow: string[] = [];
+		let optional = false;
 		if (typeof item === 'string') {
 			// convenience shorthand: "name:type:description"
 			const parts = item.split(':');
@@ -61,6 +62,9 @@ function normArgDefs(raw: unknown): ArgDef[] {
 					.map(String)
 					.map((s) => s.slice(0, 64))
 					.slice(0, 10);
+			// strict boolean, like every other capability switch: a stray string
+			// must never turn an argument optional (or required) by accident
+			optional = o.optional === true;
 		} else {
 			throw new ModuleError("manage_tool: each argument must be an object or a 'name:type:description' string");
 		}
@@ -68,7 +72,7 @@ function normArgDefs(raw: unknown): ArgDef[] {
 		if (seen.has(name)) throw new ModuleError(`manage_tool: duplicate argument '${name}'`);
 		if (!ARG_TYPES.has(type)) throw new ModuleError(`manage_tool: argument '${name}' has unknown type '${type.slice(0, 20)}' (string|number|boolean)`);
 		seen.add(name);
-		out.push({ name, type: type as ArgDef['type'], description: description.slice(0, 300), disallow });
+		out.push({ name, type: type as ArgDef['type'], description: description.slice(0, 300), disallow, ...(optional ? { optional: true } : {}) });
 	}
 	return out;
 }

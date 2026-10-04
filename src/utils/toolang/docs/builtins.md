@@ -201,14 +201,35 @@ docker.remove(container) --= force remove
 docker.start(container)
 docker.restart(container)
 docker.stop(container)
-docker.recreate(container) --= stop + remove
+docker.recreate(container) --= validate, swap, start again
 docker.edit(container, config?) --= edit or recreate with new image
+docker.attach(container, volume, path) --= mount an agent volume (below) and start again
 ```
 
 ### Config object for create/edit
 
 ```tl
 docker.create("my_app", "nginx:latest", { memory: "2G", cpu: 150, ports: [8080], volumes: [{ host: "/data", container: "/app/data" }], additional_args: ["--restart", "always"] })
+```
+
+### Volumes
+
+Two entry shapes for `volumes`:
+
+- `{ volume: "data", container: "/var/lib/data" }`: an AGENT VOLUME. The id
+  resolves to `<fs.root>/.docker-vols/<id>` (default `sandbox/.docker-vols`),
+  the directory is created on the spot, and no `allowed_volume_paths` entry is
+  needed: the sandbox store is the jail. Ids are one path segment (letters,
+  digits, `_ . -`, 1..64 chars, no slashes), and the store is realpath'd so a
+  symlink cannot redirect the mount.
+- `{ host: "/srv/data", container: "/app/data" }`: a real host path, refused
+  unless it sits inside `[docker].allowed_volume_paths`. Binds inside the
+  `.docker-vols` store always pass (recreate/attach read our own mounts back
+  from `docker inspect`).
+
+```tl
+docker.create("app", "nginx:alpine", { volumes: [{ volume: "webdata", container: "/usr/share/nginx/html" }] })
+docker.attach("app", "webdata", "/var/log/nginx") --= mount into an existing container
 ```
 
 To replace the image (triggers recreate):

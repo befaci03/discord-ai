@@ -92,7 +92,9 @@ function argsToSchema(args: ToolDef['arguments']): Record<string, unknown> {
 			prop.description = `${a.description} (refused values: ${a.disallow.join(', ')})`;
 		}
 		properties[a.name] = prop;
-		required.push(a.name); // the .tl validator requires every header arg
+		// optional header args stay out of `required`: the model may omit them
+		// and the tool fills the type's empty default before the body runs
+		if (!a.optional) required.push(a.name);
 	}
 	return { type: 'object', properties, required };
 }

@@ -25,6 +25,15 @@ then the program body.
 
 The `¤` character separates the tool header from the code body.
 
+Argument flags:
+
+- `disallow`: values this argument must never accept (surfaced to the model
+  in the description).
+- `optional: true`: the caller may omit the argument. The program then sees
+  the type's empty default (`""` for strings, `0` for numbers, `false` for
+  booleans), so `args.x == ""` is a reliable "not provided" check. Only a
+  real boolean `true` turns it on.
+
 ---
 
 ## Comments

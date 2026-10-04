@@ -74,6 +74,9 @@ bind_address = "127.0.0.1"
 # host paths the llm may bind-mount into containers (resolved at load).
 # empty = every host mount is refused: without this the llm could mount /etc
 # into a container and read it back. e.g. ["/srv/work"]
+# AGENT VOLUMES do NOT need this: a volume id (docker_create volume=... or
+# docker_manage action=mount) resolves to sandbox/.docker-vols/<volume_id>,
+# which is jailed inside the fs sandbox above.
 allowed_volume_paths = []
 max_containers = 100
 default_image = "debian:bookworm"

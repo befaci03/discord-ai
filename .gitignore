@@ -81,8 +81,11 @@ config.*
 modules/.tunnel/
 
 # local runtime state (sqlite db + toggle persistence)
-modules/data.sqlite*
-*.sqlite*
+**/*/*.sqlite*
+
+# fs sandbox runtime state (agent-written files + .docker-vols volume stores)
+sandbox/
+!sandbox/.gitkeep
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache

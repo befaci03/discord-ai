@@ -3,7 +3,7 @@
 
 import { readdirSync, existsSync, statSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
-import { parseToolSource, executeToolSource, validateToolArgs, ParseError } from '../utils/toolang/index.js';
+import { parseToolSource, executeToolSource, validateToolArgs, fillOptionalDefaults, ParseError } from '../utils/toolang/index.js';
 import { resolveLimits } from '../utils/toolang/limits.js';
 import { ToolContext, LoadedTool, ModuleError } from './types.js';
 import { AppConfig } from '../utils/config.js';
@@ -71,6 +71,8 @@ export class ToolRegistry {
 			invoke: async (args: Record<string, unknown>, ctx: ToolContext): Promise<unknown> => {
 				const errors = validateToolArgs(header, args);
 				if (errors.length > 0) throw new ModuleError(`invalid arguments for tool '${header.name}': ${errors.join('; ')}`);
+				// omitted optional args arrive in the body as '' / 0 / false
+				const filled = fillOptionalDefaults(header, args);
 
 				const limits = resolveLimits({
 					maxLoopIterations: config.agent.toolang.maxLoopIterations,
@@ -79,7 +81,7 @@ export class ToolRegistry {
 					maxOutputLength: config.agent.toolang.maxOutputLength
 				});
 
-				const result = await executeToolSource(source, args, {
+				const result = await executeToolSource(source, filled, {
 					config: {
 						http: config.agent.toolang.http,
 						fs: config.agent.toolang.fs,
@@ -93,7 +95,10 @@ export class ToolRegistry {
 							maxContainers: config.docker.maxContainers,
 							defaultImage: config.docker.defaultImage,
 							allowedVolumePaths: config.docker.allowedVolumePaths,
-							bindAddress: config.docker.bindAddress
+							bindAddress: config.docker.bindAddress,
+							// agent volumes live in <fs.root>/.docker-vols/<volume_id>:
+							// inside the fs sandbox, so they mount without an allowlist entry
+							volumeRoot: path.resolve(config.agent.toolang.fs.root, '.docker-vols')
 						}
 					},
 					discord: ctx.discord as never,

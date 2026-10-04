@@ -4,10 +4,12 @@
  * Argument definition for a tool.
  */
 export interface ArgDef {
-	type: "string" | "number" | "boolean";
+	type: 'string' | 'number' | 'boolean';
 	name: string;
 	description: string;
 	disallow: string[];
+	/** true = the caller may omit it: it arrives as the type's empty default ('' / 0 / false) */
+	optional?: boolean;
 }
 
 /**

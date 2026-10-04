@@ -439,7 +439,7 @@ the same `extraVars` contract.
 ### 17.1. Permission model
 
 The interpreter enforces permissions in this order:
-1. **Tool argument validation** — the tool declares `arguments` + `disallow`.
+1. **Tool argument validation** — the tool declares `arguments` + `disallow` (plus `optional: true` for arguments the caller may omit: they arrive as `""` / `0` / `false`).
 2. **Config limits** — step/loop/call-depth/output budgets.
 3. **Module gates** — `fs.allowWrite`, `node.enabled` + command allowlist,
    `http` allowlist/blockPrivate, `docker.enabled`, `skills.allowEnvAccess`.
@@ -497,7 +497,7 @@ validation — it is process execution, not file I/O.
 2. `parseToolFile(path)` → `ParsedTool { header, body }`.
 3. Header validation:
    * `header.name` must match `/^[a-z][a-z0-9_]{1,63}$/`.
-   * `arguments` entries validated (type in allowed set, `disallow` is string[]).
+   * `arguments` entries validated (type in allowed set, `disallow` is string[], `optional` only honored as a real boolean `true`).
 4. `ToolRegistry.loadOne(path)` reads the file, parses, builds a `LoadedTool`
    with an `invoke` closure. Missing/hidden/disabled tools are skipped.
 5. `ToolRegistry.loadAll()` returns `{ loaded, skipped }`.
@@ -765,6 +765,7 @@ Backend-specific:
 - [ ] `description` is concise and useful to the LLM.
 - [ ] Every declared argument is validated (`typeof`, length, range).
 - [ ] `disallow` list is non-empty when the argument is sensitive.
+- [ ] An argument is marked `optional` only when the body handles its empty default (`""` / `0` / `false`).
 - [ ] Only one top-level `return`; it is the last statement of the happy path.
 - [ ] File uses `fs` only within `fs.root` when `fs.allowWrite` is false.
 - [ ] Network calls respect `http.allowedHosts` / `blockPrivate`.
