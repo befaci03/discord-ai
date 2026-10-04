@@ -84,7 +84,7 @@ modules/.tunnel/
 **/*/*.sqlite*
 
 # fs sandbox runtime state (agent-written files + .docker-vols volume stores)
-sandbox/
+sandbox/**/*
 !sandbox/.gitkeep
 
 # parcel-bundler cache (https://parceljs.org/)
