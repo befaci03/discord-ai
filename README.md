@@ -83,6 +83,26 @@ external = ""            # provider outages; "" = use generic
 provider = "no LLM provider configured. Set [agent.providers] + [agent.models] ..."
 ```
 
+## Vision and model-type tools
+
+Image attachments are sent to the model (max 4 per message) when the chosen
+model is vision-capable: auto-detected from the model name, or forced with
+`vision = true/false` on a model entry. Non-vision models just get the text.
+
+For every model type you enable, the agent gets a matching tool:
+`llm_gen_image` / `llm_gen_video` / `llm_gen_audio`, `llm_transcribe`,
+`llm_rerank` and `llm_code` (routes a task to the coding model). They are
+ephemeral: generated content never pollutes the conversation memory.
+
+## Discord powers
+
+The `discord` TooLang module checks arguments first, then the bot's real
+permissions, then hierarchy (never the owner, never itself, never anyone at
+or above its top role): messages and edits (own only), reactions, presence,
+polls, channels, threads, roles, emojis/stickers/soundboards, events, and
+member moderation (kick/ban/timeout/role changes). Every send disables pings.
+See [builtins.md](src/utils/toolang/docs/builtins.md) for signatures.
+
 ## Addons: agent capabilities
 
 Addons give the agent itself new powers the LLM calls during conversation:
@@ -197,7 +217,7 @@ Instructions the agent receives when a trigger matches.
 ## Tests
 
 ```bash
-bun test           # bun's built-in runner: brain, config, tools+docker, dashboard, addons, manage, cron, tunnel, github
+bun test           # bun's built-in runner: brain, config, tools+docker, dashboard, addons, manage, cron, tunnel, github, vision, llm tools, discord builtins
 bun run typecheck  # tsc --noEmit
 ```
 

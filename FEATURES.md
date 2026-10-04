@@ -39,7 +39,7 @@ has a JSON tool header, then a `¤` delimiter, then the program body.
 | `Array` | slice, push, length, range, repeat |
 | `Object` | keys/values/entries/fromEntries/merge/freeze |
 | `docker` | container lifecycle behind image/port allowlists and name validation, plus `docker.list()` / `docker.images()` (tab separated), `docker.pull()` (allow/deny lists first), `docker.exists()` / `docker.is_running()` boolean probes, `docker.run()` with quote-aware argv (no shell). Every op is refused unless `[docker].enabled = true`, honors `docker.host` and `max_containers`. Published ports bind to `[docker].bind_address` (default `127.0.0.1`; loopback/private/`0.0.0.0` only), host bind-mounts need `[docker].allowed_volume_paths` (empty = no mounts at all), agent volumes mount from `<fs.root>/.docker-vols/<volume_id>` with no allowlist entry (`docker.attach` mounts one into an existing container, `docker.detach` drops it again, `docker.cp` copies one file across the boundary with fs-jail + size caps) |
-| `discord` | messages, embeds, reactions, polls, channels, roles, members, events (needs a client) |
+| `discord` | permission-checked messages, edits, reactions, presence, polls, embeds, channels/threads/categories, roles, emojis/stickers/soundboards, events, members (kick/ban/timeout/roles) with hierarchy guards (needs a client) |
 | `agent` | text/image/audio/video generation, transcription, `rerank(query, documents)` against `[agent.models].rerank_model` (Cohere-style `/rerank`, returns `[{ index, score }]` best-first) (needs an agent) |
 | `sys` | read-only host info (hostname, mem, cpus); env lookups by exact name only |
 | `env` | environment access, fully disabled unless skills.allow_env_access = true; secrets redacted from listings |
@@ -157,22 +157,32 @@ authentication and live updates:
   presence, guilds, agent busy/doing/mode, llm on/off), addon state,
   security (sessions + login-guard stats), per-tool run stats, live feed,
   recent audit trail, tool runner, tools & skills manager
-- runtime toggles: enable/disable any loaded tool, skill or addon from the UI
-  (`POST /api/tools/toggle`, `POST /api/skills/toggle`,
-  `POST /api/addons/toggle`). Audited + broadcast live, and persisted to
-  `modules/config.json` so they survive restarts (config `[tools] disabled` /
-  `[skills] disabled` still apply on top). Disabled tools are refused
-  everywhere: chat `!tool`, dashboard runner, and the LLM tool list.
-  Disabled addons lose their LLM functions immediately, even mid-conversation:
-  the agent's function invoker re-checks addon state at call time, and the
-  functions are also hidden from new conversations
+- runtime toggles: enable/disable any loaded tool, skill, addon or single
+  addon function from the UI (`POST /api/tools/toggle`,
+  `POST /api/skills/toggle`, `POST /api/addons/toggle`,
+  `POST /api/functions/toggle`). All four kinds share one handler and one
+  schema: `{ name, enabled }` where `enabled` must be a real JSON boolean
+  (anything else is a 400, never a guess: a truthy string used to count as a
+  *disable*). Audited + broadcast live, and persisted to `modules/config.json`
+  so they survive restarts (config `[tools] disabled` / `[skills] disabled`
+  still apply on top). Disabled tools are refused everywhere: chat `!tool`,
+  dashboard runner, and the LLM tool list. Disabled addons lose their LLM
+  functions immediately, even mid-conversation: the agent's function invoker
+  re-checks addon state at call time, and the functions are also hidden from
+  new conversations
+- function toggles are addon-scoped: unknown function = 404, `internal`
+  functions (addon wiring) = 400 and never move, and enabling a function while
+  its owning addon is disabled = 409 ("enable the addon first") so the audit
+  trail can never record an enable that did not happen. The manager shows
+  `n/a` instead of a dead button in that state
 - JSON API: `/api/login|logout`, `/api/status`, `/api/tools`, `/api/skills`,
   `/api/addons`, `/api/stats`, `/api/audit`, `POST /api/tools/toggle`,
-  `POST /api/skills/toggle`, `POST /api/addons/toggle`, `POST /api/run`,
-  `/api/health`
+  `POST /api/skills/toggle`, `POST /api/addons/toggle`,
+  `POST /api/functions/toggle`, `POST /api/run`, `/api/health`
 - toggle persistence: `modules/config.json` holds the runtime overrides
-  (validated, size-capped, written atomically via tmp+rename). A corrupt or
-  oversized file is ignored at startup, never fatal
+  (tools/skills/addons/**functions** sections, validated, size-capped, written
+  atomically via tmp+rename). A corrupt or oversized file is ignored at
+  startup, never fatal
 
 ## LLM pipeline
 
@@ -184,6 +194,19 @@ authentication and live updates:
   types fall back to the default model (reported at startup); types with a
   broken provider entry are skipped with a warning instead of failing at
   call time
+- vision: image attachments (message attachments and embed image URLs) are
+  picked up (`src/agent/vision.ts`, max 4 images, data/http URLs only) and
+  sent as image parts so a vision-capable model can see them. Auto-detected
+  from the model name, overridable per model with `vision = true/false`; when
+  the chosen model has no vision the images are dropped with a log line,
+  never an error
+- model-type tools: for every enabled model type the model gets tools that
+  call back into that type (`src/agent/llmtools.ts`):
+  `llm_gen_image` / `llm_gen_video` / `llm_gen_audio` (image/video/tts
+  types), `llm_transcribe` (stt, https URL <= 2000 chars), `llm_rerank`
+  (rerank_model, `[{ index, score }]` best-first) and `llm_code` (routes a
+  task to the coding model). All of these are ephemeral asks: they never
+  touch the conversation memory
 - every ask rebuilds its system prompt: identity + `[agent].prompt` +
   `.prompt.txt`, **the environment block** (config facts the model cannot
   discover: docker port ranges + container caps + bind address + mount policy,
@@ -235,6 +258,37 @@ authentication and live updates:
   itself may do in that channel (granted + missing permissions, with an
   instruction not to promise what it cannot do)
 - `bot.guild_id` scopes the bot to a single guild when set
+
+## Discord powers (TooLang `discord` module)
+
+The `discord` builtin (`builtins/discord.ts` + `discordmanage.ts`, guards in
+`discordguard.ts`) is a permission-aware wrapper over discord.js v14: every
+call validates arguments first (snowflakes, length caps, timeout range), then
+checks the bot's real permissions, and fails with a readable
+`missing permission: X` instead of a raw Discord error code. Hierarchy guards
+refuse to act on the guild owner, the bot itself, or anyone at/above the bot's
+highest role (role grants additionally refuse `@everyone`, managed roles and
+roles out of reach). All sends use `allowedMentions { parse: [] }`.
+
+- messages: send, reply, get, delete (own messages free, others need
+  `ManageMessages`), edit own messages only (Discord's rule, clear error
+  instead of raw 40333), `edit_last_message` (scans the last 25), polls
+  (1..300-char title, 2..10 answers, 1..768 hours), stickers
+- reactions: add (`AddReactions`), remove own (or others with
+  `ManageMessages`), clear an emoji entirely; emoji accepted as unicode,
+  `<:name:id>` or bare name
+- presence: `set_presence` (online/idle/dnd/invisible +
+  playing/streaming/listening/watching/competing, 128-char text, streaming
+  needs a Twitch/YouTube URL) and `get_presence`
+- guild management: channels/threads/categories (`ManageChannels` /
+  `CreatePublicThreads` / `ManageThreads`), roles (`ManageRoles` + hierarchy),
+  emojis/stickers/soundboards (`CreateGuildExpressions` or
+  `ManageGuildExpressions` to create, `ManageGuildExpressions` to
+  edit/delete), scheduled events (`CreateEvents` / `ManageEvents`)
+- members: read-only `get_member`, kick/ban/unban, timeout/untimeout
+  (1..2419200 s), grant/revoke role, has_role, all behind their permission
+  gates + hierarchy checks, reasons trimmed to 512 chars, mutations
+  audit-logged through the normal tool path
 
 ## Configuration (`config.toml`, see `example.config.toml`)
 

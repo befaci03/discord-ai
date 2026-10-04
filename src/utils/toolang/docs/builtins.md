@@ -330,23 +330,66 @@ the content over stdin and refuses payloads above 1 MB.
 
 Discord.js wrapper. Requires a Discord.js `Client` to be passed via `InterpreterContext`.
 
+Every function validates its arguments first (snowflakes, lengths, ranges),
+then checks the bot's real permissions before touching the API, and throws a
+readable error like `missing permission: ManageRoles` instead of a raw Discord
+code. All sends set `allowedMentions { parse: [] }`, so model output can never
+ping `@everyone` or roles.
+
+Permission gates at a glance:
+
+| area | needs |
+|------|-------|
+| send / reply / poll / sticker post | `SendMessages` or `SendMessagesInThreads` |
+| edit own message | none (Discord lets the author edit) |
+| delete others' messages, clear reactions | `ManageMessages` |
+| react | `AddReactions` |
+| presence | none (self) |
+| emoji / sticker / soundboard create | `CreateGuildExpressions` or `ManageGuildExpressions` |
+| emoji / sticker / soundboard edit+delete | `ManageGuildExpressions` |
+| channels / threads / categories | `ManageChannels` (threads: `CreatePublicThreads` / `ManageThreads`) |
+| roles create / edit / delete | `ManageRoles` + role hierarchy |
+| events create | `CreateEvents` or `ManageEvents` |
+| events edit / delete | `ManageEvents` |
+| kick / ban / unban | `KickMembers` / `BanMembers` |
+| timeout / untimeout | `ModerateMembers` |
+| grant / revoke role | `ManageRoles` + role reach + target hierarchy |
+
 ### Messages
 
 ```tl
 discord.send_message(content, options?)
 discord.reply(message_id, content, options?)
-discord.edit_message(message_id, content, options?)
-discord.delete_message(message_id)
+discord.edit_message(message_id, content, options?)   --# own messages only (Discord's rule)
+discord.edit_last_message(channel_id, content, options?) --# edits the bot's newest of the last 25
+discord.delete_message(message_id)                   --# own free, others need ManageMessages
 discord.get_message(message_id)
-discord.react(message_id, emoji)
-discord.delete_reaction(message_id, emoji)
+discord.react(message_id, emoji)                     --# needs AddReactions
+discord.remove_reaction(message_id, emoji, user_id?) --# own default, others need ManageMessages
+discord.delete_reaction(message_id, emoji)           --# clears the emoji, needs ManageMessages
 ```
+
+Sending needs `SendMessages` (or `SendMessagesInThreads`), content is capped
+at 2000 chars, and a message needs content, an embed or an attachment.
 
 Options object:
 
 ```tl
 discord.send_message("hello", { embeds: [discord.make_embed({ title: "Hi", description: "test" }, [])], attachments: [discord.make_attachment({ name: "file.txt", type: "custom", data: "content" })] })
 ```
+
+### Presence
+
+```tl
+discord.set_presence(status?, activity_type?, text?, url?)
+discord.get_presence()
+```
+
+`status`: `"online"`, `"idle"`, `"dnd"`, `"invisible"` (default `"online"`).
+`activity_type`: `"playing"`, `"streaming"`, `"listening"`, `"watching"`,
+`"competing"`. Text is capped at 128 chars; `"streaming"` requires a
+Twitch/YouTube URL. `get_presence()` returns `{ status, activities: [{ type,
+name }] }`.
 
 ### Embeds and Attachments
 
@@ -465,15 +508,25 @@ Where object: `{ type: "voice"|"text", value: "channel_id" }` or `{ type: "exter
 ### Members
 
 ```tl
-discord.kick_member(member_id, reason?)
-discord.ban_member(member_id, reason?)
-discord.unban_member(member_id, reason?)
-discord.timeout_member(member_id, duration_seconds, reason?)
-discord.untimeout_member(member_id, reason?)
-discord.grant_role(member_id, role_id, reason?)
-discord.revoke_role(member_id, role_id, reason?)
+discord.get_member(member_id)                        --# read-only info object
+discord.kick_member(member_id, reason?)              --# needs KickMembers
+discord.ban_member(member_id, reason?)               --# needs BanMembers
+discord.unban_member(member_id, reason?)             --# needs BanMembers
+discord.timeout_member(member_id, duration_seconds, reason?) --# needs ModerateMembers, 1..2419200 s
+discord.untimeout_member(member_id, reason?)         --# needs ModerateMembers
+discord.grant_role(member_id, role_id, reason?)      --# needs ManageRoles
+discord.revoke_role(member_id, role_id, reason?)     --# needs ManageRoles
 discord.has_role(member_id, role_id)
 ```
+
+Moderation guards: the target must sit below the bot's highest role, and
+below the acting context where hierarchy applies (the owner, the bot itself
+and `@everyone` are never moderatable). Role changes refuse `@everyone`,
+managed roles (bot/integration roles) and any role at or above the bot's own
+top role. `reason` is trimmed and capped at 512 chars.
+
+`get_member()` returns `{ id, username, display_name, is_owner, is_bot,
+roles, top_role_position, joined_at, timeout_until }`.
 
 ---
 

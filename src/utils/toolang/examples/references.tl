@@ -115,14 +115,18 @@ discord.make_attachment({ name: "", type: "custom", data: "Hello, World! I can a
 discord.make_msgv2() --= TODO
 discord.send_message("message content", { embeds: [discord.make_embed(...)], "attachments": [discord.make_attachment({...})] })
 discord.react("message_id", "emoji")
-discord.delete_reaction("message_id", "emoji")
+discord.remove_reaction("message_id", "emoji", "user_id (nullable, own reaction by default)")
+discord.delete_reaction("message_id", "emoji") --= clears the emoji for everyone
 discord.reply("message_id", "message content")
 discord.reply("message_id", "message content", { embeds: [discord.make_embed(...)] })
 discord.send_poll("title", [{ "label": "option1", "emoji": "(optional)" }, ...], duration_in_hours)
 discord.send_sticker("sticker_id")
-discord.edit_message("message_id", "message content", { embeds: [discord.make_embed(...)], "attachments": [discord.make_attachment({...})] })
-discord.delete_message("message_id")
+discord.edit_message("message_id", "message content", { embeds: [discord.make_embed(...)], "attachments": [discord.make_attachment({...})] }) --= own messages only
+discord.edit_last_message("channel_id", "message content", options) --= edits the bot's newest message in that channel
+discord.delete_message("message_id") --= own free, others need ManageMessages
 discord.get_message("message_id")
+discord.set_presence("online/idle/dnd/invisible (nullable)", "playing/streaming/listening/watching/competing (nullable)", "activity text (nullable)", "stream url, required for streaming (nullable)")
+discord.get_presence() --= { status, activities: [{ type, name }] }
 discord.get_server_emojis()
 discord.create_emoji("emoji_name", "image_url")
 discord.edit_emoji("emoji_name", "new_name")
@@ -156,6 +160,7 @@ discord.list_scheduled_events()
 discord.schedule_event("event_name", "event_description", { "where": { "type": "voice/text", "value": "channel_id/string" }, "start_time": "", "end_time": "" }, "https://cover_image_url (nullable)")
 discord.edit_event("event_id", { "name": "", "description": "", "where": { "type": "voice/text", "value": "channel_id/string" }, "start_time": "", "end_time": "" }, "https://cover_image_url (nullable)")
 discord.delete_event("event_id")
+discord.get_member("member_id") --= read-only: roles, top role position, owner/bot flags, timeout_until
 discord.kick_member("member_id", "reason (nullable)")
 discord.ban_member("member_id", "reason (nullable)")
 discord.unban_member("member_id", "reason (nullable)")
@@ -170,6 +175,7 @@ agent.generate_image("prompt")
 agent.generate_audio("prompt")
 agent.generate_video("prompt")
 agent.transcript("audio_url")
+agent.rerank("query", ["doc1", "doc2"]) --= [{ index, score }] best-first
 
 
 

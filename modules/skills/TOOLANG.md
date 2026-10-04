@@ -1,6 +1,6 @@
 ---
 name = "toolang"
-description = "TooLang reference: lexer/parser tokens, builtin catalog with signatures, security and permission model, CLI training and lint modes, runtime debug interface and glossary for the .tl tool language"
+description = "TooLang reference: lexer/parser tokens, builtin catalog with signatures (http, fs, docker, discord, agent, regex), runtime tool/skill self-management via manage_tool/manage_skill, security and permission model, CLI training and lint modes, runtime debug interface and glossary for the .tl tool language"
 triggers = ["toolang", "too lang", ".tl file"]
 priority = 0
 ---
@@ -9,7 +9,8 @@ priority = 0
 
 This is the second half of the TOOLANG skill. It covers the operational details:
 how a tool is loaded and executed, how the interpreter consumes a program,
-the complete builtin catalog with signatures, the security and permission model,
+the complete builtin catalog with signatures, how the agent creates its own
+tools and skills at runtime, the security and permission model,
 the CLI training / lint modes, a runtime trace and debug interface, a
 migration cheat sheet, a conformance test table, and a glossary. Read the first
 half (sections 0-12) for the syntax; this half for the machinery around it.
@@ -455,6 +456,38 @@ backtracking. NOTE: in a .tl string literal a backslash escape eats the
 unknown letter (`"\\d"` in source becomes `d`): write `[0-9]` character
 classes, or double the backslash (`"\\\\d"`).
 
+### 16.14. `docker`
+
+Container lifecycle behind the operator's allowlists (see `builtins.md` for
+the full surface): `docker.run/create/edit/remove/start/stop/restart`,
+`docker.get_info/get_state/get_resources/get_console_logs`, file ops
+(`get_file_content`, `edit_file`, `rmfile`, `mvfile`, `mkdir`, `rmdir`,
+`lsdir`, `mvdir`), and the volume pair `attach`/`detach`. Every call is
+refused unless `[docker].enabled = true`; images pass the allow/deny lists,
+ports are range-checked, argv is quote-aware (never a shell string), and
+host mounts need `[docker].allowed_volume_paths` while agent volume ids
+resolve inside `<fs.root>/.docker-vols/<id>`.
+
+### 16.15. `discord`
+
+Discord.js wrapper (needs a client in the context): messages (`send_message`,
+`reply`, `edit_message` own-only, `edit_last_message`, `delete_message`,
+`get_message`), reactions (`react`, `remove_reaction`, `delete_reaction`),
+polls/stickers, presence (`set_presence`, `get_presence`), embeds/attachments,
+and guild management (emojis, stickers, soundboards, channels, threads,
+categories, roles, events, members: `get_member`, kick/ban/unban, timeout,
+`grant_role`/`revoke_role`). Arguments are validated first (snowflakes,
+length caps, timeout range 1..2419200s), then the bot's real permissions are
+checked before the API call, and hierarchy guards refuse acting on the owner,
+the bot itself, or anyone at/above the bot's top role. Sends always use
+`allowedMentions { parse: [] }`. Full signatures: `docs/builtins.md`.
+
+### 16.16. `sys` and `env`
+
+`sys` is read-only host info (hostname, mem, cpus). `env` looks up environment
+variables by exact name and is fully disabled unless
+`skills.allow_env_access = true`; listings redact secret-looking values.
+
 ---
 
 ## 17. Security and permission matrix
@@ -526,6 +559,32 @@ validation — it is process execution, not file I/O.
 5. `ToolRegistry.loadAll()` returns `{ loaded, skipped }`.
 6. At runtime, the dashboard, agent, and bot consult `isEnabled(name)` which
    combines config `disabled`, `tools.disabled`, and runtime toggles.
+
+### 18.1. Creating your own tools at runtime (`manage_tool` / `manage_skill`)
+
+When the environment block says `manage_tool AVAILABLE` (operator config:
+`[agent.toolang].allow_tool_creation` / `allow_skill_creation`), you can add
+the capability you are missing instead of describing it in prose:
+
+* `manage_tool` takes `{ action: "create"|"edit"|"delete", name,
+  description?, arguments?, body? }`: the body is only the program after the
+  `¤` delimiter (the JSON header is generated for you), `edit` keeps fields
+  you omit, `delete` removes by name. `manage_skill` is the same shape with
+  `{ description?, triggers?, instructions?, tools?, priority? }` for
+  markdown instead of a program body. Only `action` + `name` are required.
+* The body is parsed by the REAL parser before anything is written, the
+  header name must match `/^[a-z][a-z0-9_]{1,63}$/` (no path separators),
+  and size / file-count caps apply. A rejected write is rolled back and
+  audited (`tool.create` / `tool.edit` / `tool.delete`, `skill.*`).
+* Reserved: `brain_*`, the whole `manage_*` prefix, addon function names, and
+  the built-in `toolang` skill (the language reference is protected).
+  Created skills cannot use `/regex/` triggers (plain words only).
+* A create must include a real program body (header-only no-ops are refused).
+  The new tool is registered immediately: it appears in the next prompt's
+  typed tool list and can be called right away.
+* If those switches are OFF, the tool does not exist: never type a fake tool
+  call into the reply, use an existing tool or state in one line that the
+  capability is unavailable.
 
 ---
 
