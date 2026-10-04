@@ -53,11 +53,17 @@ Methods on values: strings (30+), numbers (14), arrays (20+), objects (9).
 - audit log + per-tool run stats in SQLite
 - runtime guard: unknown tools, invalid args, timeouts and errors are all
   reported without leaking internals
-- premade tools: `web_search`, `fetch_json`, `server_stats`, `sandbox_write`,
-  and the docker family `docker_list`, `docker_exec`, `docker_create`
+- premade tools: `web_search`, `fetch_json`, `server_stats`, `sandbox_write`
+  (optional `append`/`overwrite` flags: existing files are protected by
+  default, the refusal tells the model exactly which flag to pass),
+  and the docker family `docker_list`, `docker_exec` (quote-aware argv, no
+  shell), `docker_create`
   (optional `volume`/`volume_path` args mount a sandbox volume at create
-  time), `docker_manage` (start/stop/restart/remove/recreate + `mount`, which
-  mounts a sandbox volume into an existing container by recreating it)
+  time), `docker_manage` (start/stop/restart/remove/recreate + `mount` /
+  `unmount`, which attach or drop a sandbox volume on an existing container
+  by recreating it, both driven by the volume id alone) and
+  `docker_cp` (one file between sandbox and container, direction taken from
+  which side is an absolute container path; sizes capped by `fs.maxFileSize`)
   (all no-ops unless `[docker].enabled = true`)
 - every enabled tool is ALSO offered to the model as a function: header
   arguments become the JSON schema (required unless marked `optional`,
@@ -204,15 +210,21 @@ authentication and live updates:
   model edits its own tastes with `brain_set_preference` and keeps profiles
   with `brain_remember_person` / `brain_get_person`
 - `.prompt.txt` (project root) is appended to `[agent].prompt`, capped at
-  `[agent].prompt_file_max_chars` (default 24000, clamp 1000..120000): the
+  `[agent].prompt_file_max_chars` (default 24000, no clamp: 0 reads the
+  whole file): the
   place for "how the agent talks"
 - a strict operating-rules block is baked into every system prompt (Discord,
   cron, dashboard chat): act first and talk after, tool calls only through
-  the tool-calling interface (a typed-out call is text, not execution), check
+  the tool-calling interface (a typed-out call is text, not execution),
+  no invented tools (the tool list is exhaustive; a missing tool gets created
+  with `manage_tool` first, never typed into the reply), check
   real state before acting, never claim an unverified result, no permission
   questions and no asking for facts the tools can look up, resume silently
   after a failed turn. Deliberately NOT configurable: config tunes the
-  numbers (`tool_rounds`), never the rules
+  numbers (`tool_rounds`), never the rules. As a safety net, the final reply
+  is scanned for fake tool calls (private-use tag markup or a typed
+  `toolname key: value` line): they are stripped before the message is sent
+  and flagged in the log/audit, so markup never reaches the channel
 - model routing heuristic: prompts that look like code (fences, `fn`/`def`/
   `function`, `console.log`, ...) go to the `coding` model, an explicit
   `model` option always wins, internal `agent.generate_*` calls are ephemeral
@@ -234,8 +246,11 @@ authentication and live updates:
 - per-section policies: http, fs, node, docker (the top level `[docker]` is
   the single docker config)
 - `[agent.brain]`: memory window, seed tastes/people, one-shot reset
-- `[agent]`: `prompt_file_max_chars`, `tool_rounds` (tool rounds per ask,
-  default 16), `max_tokens` (per provider call, 0 = provider default)
+- `[agent]`: `prompt_file_max_chars` (0 = unlimited), `tool_rounds` (tool
+  rounds per ask, clamp 2..192), `tool_calls_per_round` (tool calls executed
+  per round, extras are answered "deferred, re-issue next round", clamp
+  1..15, default 10), `max_tokens` (per provider call, 0 = provider default,
+  clamp 0..5000000)
 - `[general.errors]`: wording for the failures the bot posts (`generic`,
   `tool`, `external`, `provider`); each is a capped line and only `{error}` /
   `{service}` are substituted, so raw internals can never leak into chat
@@ -266,8 +281,12 @@ authentication and live updates:
   blocks back as `tool_result`s, and drops tools on the last round so the
   model is forced to answer in text). Both send an explicit `tool_choice:
   auto` (some OpenAI-compatible gateways skip the tool schema without it).
-  The round budget is `[agent].tool_rounds` (default 16, clamp 1..64), and
-  output is capped by `[agent].max_tokens` (0 = provider default; Anthropic
+  The round budget is `[agent].tool_rounds` (clamp 2..192), the calls that
+  run per round are `[agent].tool_calls_per_round` (clamp 1..15: the first N
+  execute, the rest get a "deferred" tool result asking the model to re-issue
+  them next round, so no call is ever silently dropped), and
+  output is capped by `[agent].max_tokens` (0 = provider default, clamp
+  0..5000000; Anthropic
   then runs with 4096 so a tool-heavy turn is not cut off)
 - progress messages: each tool round calls `AskOptions.onToolCall` with the
   tool names before they run, and the bot turns that into the channel message

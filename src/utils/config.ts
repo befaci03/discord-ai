@@ -109,11 +109,13 @@ export interface BrainConfig {
 export interface AgentConfig {
 	name: string;
 	prompt: string;
-	/** char budget for the optional .prompt.txt persona (clamped 1k..120k) */
+	/** char budget for the optional .prompt.txt persona (0 = unlimited) */
 	promptFileMaxChars: number;
-	/** tool-call rounds per ask before the model is forced to answer (1..64) */
+	/** tool-call rounds per ask before the model is forced to answer (2..192) */
 	toolRounds: number;
-	/** output tokens per provider call; 0 = provider default */
+	/** tool calls executed per round, the rest are asked to re-issue (1..15) */
+	toolCallsPerRound: number;
+	/** output tokens per provider call; 0 = provider default (max 5M) */
 	maxTokens: number;
 	brain: BrainConfig;
 	providers: Record<string, AgentProviderConfig>;
@@ -197,7 +199,7 @@ export interface AppConfig {
 	logging: { level: 'debug' | 'info' | 'warn' | 'error'; file?: string };
 }
 
-const DEFAULT_CONFIG: AppConfig = {
+export const DEFAULT_CONFIG: AppConfig = {
 	bot: { token: '', client_id: '', status: 'watching the server burn' },
 	general: {
 		execution_message: ':thinking: *Executing `[TOOL_NAME]`...*',
@@ -226,7 +228,8 @@ const DEFAULT_CONFIG: AppConfig = {
 		name: 'Agent',
 		prompt: 'You are a helpful Discord agent.',
 		promptFileMaxChars: 24_000,
-		toolRounds: 16,
+		toolRounds: 24,
+		toolCallsPerRound: 10,
 		maxTokens: 0,
 		brain: { memory: 30, likes: [], dislikes: [], favorites: [], pending: [], people: {}, reset: false },
 		providers: {},

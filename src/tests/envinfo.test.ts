@@ -65,6 +65,25 @@ describe('environment block', () => {
 		expect(withToken).not.toContain('ghp_not_a_real_token');
 	});
 
+	test('volumes are taught as mount/access/unmount with ONLY a volume id', () => {
+		const block = environmentBlock(
+			cfg((c) => {
+				c.docker.enabled = true;
+			}),
+			{ activeAddons: [] }
+		);
+		expect(block).toContain('Volumes (a volume id is ALL you ever pass)');
+		expect(block).toContain('action=mount');
+		expect(block).toContain('action=unmount');
+		expect(block).toContain('sandbox/.docker-vols/<volume_id>');
+		expect(block).not.toContain('blah');
+	});
+
+	test('the tool budget line states the per-round call limit', () => {
+		const block = environmentBlock(cfg(), { activeAddons: [] });
+		expect(block).toContain(`up to ${cfg().agent.toolCallsPerRound} tool calls run per round`);
+	});
+
 	test('sandbox policy is stated (fs root, shell, http guard)', () => {
 		const block = environmentBlock(cfg(), { activeAddons: [] });
 		expect(block).toContain('filesystem sandbox: root');

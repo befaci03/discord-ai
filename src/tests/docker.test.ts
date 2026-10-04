@@ -3,10 +3,10 @@
 // Agent volumes live in <volumeRoot>/<volume_id> (sandbox/.docker-vols).
 
 import { describe, test, expect } from 'bun:test';
-import { mkdtempSync, statSync, rmSync } from 'node:fs';
+import { mkdtempSync, statSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { Docker, DockerPolicy } from '../utils/toolang/builtins/docker.js';
+import { Docker, DockerPolicy, splitArgv } from '../utils/toolang/builtins/docker.js';
 
 function policy(over: Partial<DockerPolicy> = {}): DockerPolicy {
 	return {
@@ -52,7 +52,9 @@ describe('docker enabled gate', () => {
 			['mvdir', () => d.mvdir('web', '/tmp/a', '/tmp/b')],
 			['recreate', () => d.recreate('web')],
 			['edit', () => d.edit('web', { image: 'nginx:alpine' })],
-			['attach', () => d.attach('web', 'data', '/data')]
+			['attach', () => d.attach('web', 'data', '/data')],
+			['detach', () => d.detach('web', 'data')],
+			['cp', () => d.cp('web', 'a.txt', '/usr/share/a.txt')]
 		];
 		for (const [op, call] of ops) {
 			const err = errorOf(call);
@@ -186,6 +188,81 @@ describe('agent volumes (.docker-vols)', () => {
 		// with a message that says which container could not be read
 		expect(errorOf(() => d.attach('web', 'data', '/data'))).toContain('could not read the image');
 		drop(store);
+	});
+
+	test('detach identifies the mount by volume id alone, before docker is touched', () => {
+		const store = storeDir();
+		const d = Docker(() => policy({ enabled: true, volumeRoot: store }));
+		expect(errorOf(() => d.detach('web', '../etc'))).toContain('invalid volume id');
+		expect(errorOf(() => d.detach('web', ''))).toContain('invalid volume id');
+		expect(errorOf(() => d.detach('bad;name', 'data'))).toContain('invalid container name');
+		expect(errorOf(() => d.detach('web', 'data', 'not/absolute'))).toContain('absolute');
+		// no store: refused before any docker call
+		expect(errorOf(() => Docker(() => policy({ enabled: true })).detach('web', 'data'))).toContain('unavailable');
+		// good inputs reach `docker inspect`, which fails here (no docker/daemon)
+		expect(errorOf(() => d.detach('web', 'data'))).toContain('could not read the image');
+		drop(store);
+	});
+});
+
+describe('docker.run argv splitting', () => {
+	test('quotes group words, no shell is involved', () => {
+		expect(splitArgv("sh -c 'echo a b'")).toEqual(['sh', '-c', 'echo a b']);
+		expect(splitArgv('grep -e "foo bar" /tmp/x')).toEqual(['grep', '-e', 'foo bar', '/tmp/x']);
+		expect(splitArgv('  ls   -la  ')).toEqual(['ls', '-la']);
+		// backslash escapes the next char outside quotes
+		expect(splitArgv('echo a\\ b')).toEqual(['echo', 'a b']);
+		expect(splitArgv('')).toEqual([]);
+	});
+
+	test('unbalanced quotes fail with a clear error instead of a container shell error', () => {
+		expect(errorOf(() => splitArgv("sh -c 'echo hi"))).toContain('unbalanced');
+		expect(errorOf(() => splitArgv('echo "a b'))).toContain('unbalanced');
+	});
+
+	test('docker.run refuses an empty command before exec', () => {
+		const d = Docker(() => policy({ enabled: true }));
+		expect(errorOf(() => d.run('web', '   '))).toContain('must contain a command');
+		expect(errorOf(() => d.run('web', ''))).toContain('non-empty');
+	});
+});
+
+describe('docker.cp', () => {
+	/** a fresh sandbox root per test: the repo's sandbox must stay untouched */
+	function sandboxDir(): string {
+		return mkdtempSync(path.join(tmpdir(), 'cpsandbox-'));
+	}
+
+	test('the direction comes from which side is absolute', () => {
+		const root = sandboxDir();
+		const d = Docker(() => policy({ enabled: true, fsRoot: root }));
+		// both absolute / both relative: ambiguous, refused before docker runs
+		expect(errorOf(() => d.cp('web', '/a/b.txt', '/c/d.txt'))).toContain('both sides are absolute');
+		expect(errorOf(() => d.cp('web', 'a.txt', 'b.txt'))).toContain('no container path');
+		// container side: absolute, no '..', same charset as every container path
+		expect(errorOf(() => d.cp('web', 'a.txt', '/x/../etc'))).toContain('absolute');
+		expect(errorOf(() => d.cp('web', 'a.txt', 'relative/path'))).toContain('no container path');
+		// container name goes through the same NAME_RE as every other op
+		expect(errorOf(() => d.cp('bad;name', 'a.txt', '/out.txt'))).toContain('invalid container name');
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	test('the sandbox side stays jailed in fs root', () => {
+		const root = sandboxDir();
+		const d = Docker(() => policy({ enabled: true, fsRoot: root }));
+		expect(errorOf(() => d.cp('web', '../../etc/passwd', '/out.txt'))).toContain('must stay inside');
+		expect(errorOf(() => d.cp('web', 'a/../../etc/passwd', '/out.txt'))).toContain('must stay inside');
+		// no fs root configured: refused before any docker call
+		expect(errorOf(() => Docker(() => policy({ enabled: true })).cp('web', 'a.txt', '/out.txt'))).toContain('unavailable');
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	test('files above the size cap never cross the boundary', () => {
+		const root = sandboxDir();
+		writeFileSync(path.join(root, 'big.txt'), 'x'.repeat(64));
+		const d = Docker(() => policy({ enabled: true, fsRoot: root, fsMaxFileSize: 32 }));
+		expect(errorOf(() => d.cp('web', 'big.txt', '/in.txt'))).toContain('too large');
+		rmSync(root, { recursive: true, force: true });
 	});
 });
 

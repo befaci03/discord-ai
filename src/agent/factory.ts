@@ -59,15 +59,16 @@ export function llmAvailable(config: AppConfig): boolean {
 /**
  * Read a persona file and cap it at `cap` chars (the operator's
  * [agent].prompt_file_max_chars, default 24k: a stray or hostile file must not
- * bloat every single request). Exported for tests.
+ * bloat every single request). cap 0 = unlimited, on purpose. Exported for
+ * tests.
  */
 export function readPromptFile(file: string, cap: number, log: Logger): string {
 	try {
 		if (!existsSync(file)) return '';
 		const text = readFileSync(file, 'utf-8').trim();
 		if (text.length === 0) return '';
-		if (text.length > cap) log.warn(`persona file ${path.basename(file)} is ${text.length} chars, truncated to ${cap}`);
-		return text.slice(0, cap);
+		if (cap > 0 && text.length > cap) log.warn(`persona file ${path.basename(file)} is ${text.length} chars, truncated to ${cap}`);
+		return cap > 0 ? text.slice(0, cap) : text;
 	} catch (err) {
 		log.warn(`could not read ${path.basename(file)}: ${(err as Error).message}`);
 		return '';
@@ -217,11 +218,14 @@ export function buildAgent(db: DB, config: AppConfig, tools: Tool[], log: Logger
 	// identity, then the strict behavior rules, then the facts only the config
 	// knows (port ranges, sandbox policy, which creation switches are on) so
 	// the model stops guessing
-	const sysPrompt = `${config.agent.prompt}${extraPersona ? `\n${extraPersona}` : ''}\nYour name is ${config.agent.name}.\n${behaviorRules(config.agent.toolRounds)}${environmentBlock(config, { activeAddons })}`;
+	const sysPrompt = `${config.agent.prompt}${extraPersona ? `\n${extraPersona}` : ''}\nYour name is ${config.agent.name}.\n${behaviorRules(config.agent.toolRounds, config.agent.toolCallsPerRound)}${environmentBlock(config, { activeAddons })}`;
 	const rounds = config.agent.toolRounds;
 	const maxOut = config.agent.maxTokens;
+	const callsPerRound = config.agent.toolCallsPerRound;
 	const agent =
-		provider.apiType === 0 ? new AnthropicAgent(db, provider, models, sysPrompt, tools, rounds, log2, maxOut) : new OpenAIAgent(db, provider, models, sysPrompt, tools, rounds, log2, maxOut);
+		provider.apiType === 0
+			? new AnthropicAgent(db, provider, models, sysPrompt, tools, rounds, log2, maxOut, callsPerRound)
+			: new OpenAIAgent(db, provider, models, sysPrompt, tools, rounds, log2, maxOut, callsPerRound);
 	// the brain reads its shape from [agent.brain]: memory window, seed tastes,
 	// seeded people profiles, and the one-shot reset flag
 	agent.maxMemory = config.agent.brain.memory;

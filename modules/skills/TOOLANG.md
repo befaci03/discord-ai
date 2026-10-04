@@ -368,7 +368,8 @@ codec.uuid()               -- uuid v4
 ### 16.7. `fs` (sandboxed file access)
 ```tl
 fs.read(path)          -- string
-fs.write(path, content)  -- true (create/overwrite only, must stay in fs.root)
+fs.write(path, content)  -- true (create-only: refuses to clobber an existing file, must stay in fs.root)
+fs.write(path, content, overwrite)  -- true, overwrite=true (3rd arg) replaces the file
 fs.append(path, content)
 fs.list(path)          -- string[]
 fs.mkdir(path)

@@ -17,8 +17,8 @@ let server: ReturnType<typeof Bun.serve>;
 let provider: Provider;
 let model: Model;
 
-/** queued mock replies: "text" = plain answer, "tool" = tool call request */
-let script: ('text' | 'tool')[] = ['text'];
+/** queued mock replies: "text" = plain answer, "tool" = tool call request, "multitool" = four calls in one round */
+let script: ('text' | 'tool' | 'multitool')[] = ['text'];
 /** every request body the mock received, in order */
 let seen: Record<string, never>[] = [];
 
@@ -26,7 +26,8 @@ const PROVIDER: Provider = { apiType: 1, baseUrl: '', apiKey: 'sk-test' };
 
 function nextBody(): Record<string, unknown> {
 	const kind = script.length > 1 ? script.shift()! : script[0];
-	if (kind === 'tool') {
+	if (kind === 'tool' || kind === 'multitool') {
+		const count = kind === 'multitool' ? 4 : 1;
 		return {
 			id: 'chatcmpl-tool',
 			object: 'chat.completion',
@@ -38,7 +39,7 @@ function nextBody(): Record<string, unknown> {
 					message: {
 						role: 'assistant',
 						content: null,
-						tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'echo_tool', arguments: '{"x":"hi"}' } }]
+						tool_calls: Array.from({ length: count }, (_, i) => ({ id: `call_${i + 1}`, type: 'function' as const, function: { name: 'echo_tool', arguments: '{"x":"hi"}' } }))
 					},
 					finish_reason: 'tool_calls'
 				}
@@ -87,8 +88,8 @@ beforeEach(() => {
 	seen = [];
 });
 
-function makeAgent(tools: Tool[] = []): OpenAIAgent {
-	return new OpenAIAgent(db, provider, [model], 'You are a test agent.', tools, 4, new Logger('error'));
+function makeAgent(tools: Tool[] = [], callsPerRound = 10): OpenAIAgent {
+	return new OpenAIAgent(db, provider, [model], 'You are a test agent.', tools, 4, new Logger('error'), 0, callsPerRound);
 }
 
 describe('OpenAI agent', () => {
@@ -125,6 +126,33 @@ describe('OpenAI agent', () => {
 		// the second request must carry the tool result for the model
 		const second = seen[1] as unknown as { messages: { role: string; role2?: string; tool_call_id?: string }[] };
 		expect(second.messages.some((m) => m.role === 'tool')).toBe(true);
+	});
+
+	test('calls beyond the per-round budget run as deferred, never dropped', async () => {
+		script = ['multitool', 'text'];
+		let runs = 0;
+		const tool: Tool = {
+			name: 'echo_tool',
+			description: 'Echo',
+			parameters: { type: 'object', properties: { x: { type: 'string' } }, required: ['x'] },
+			invoker: async () => {
+				runs++;
+				return { ok: true };
+			}
+		};
+		// the model fires 4 calls, the budget allows 2 per round
+		const agent = makeAgent([tool], 2);
+		const rounds: string[][] = [];
+		const res = await agent.ask('batch them', undefined, { onToolCall: (names) => rounds.push(names) });
+
+		expect(runs).toBe(2); // only the first 2 executed
+		expect(rounds).toEqual([['echo_tool', 'echo_tool']]); // the progress hook sees what RUNS
+		// every id got an answer: 2 results + 2 deferred notes
+		const second = seen[1] as unknown as { messages: { role: string; content: string }[] };
+		const toolMsgs = second.messages.filter((m) => m.role === 'tool');
+		expect(toolMsgs).toHaveLength(4);
+		expect(toolMsgs.filter((m) => m.content.includes('deferred'))).toHaveLength(2);
+		expect(res.choices[0]?.message?.content).toBe('bonjour');
 	});
 
 	test('a broken progress hook cannot eat the answer', async () => {

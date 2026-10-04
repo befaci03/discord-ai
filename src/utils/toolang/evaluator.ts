@@ -486,6 +486,9 @@ export class Evaluator {
 			dockerModule(() => {
 				const cfg = (this.ctx.config ?? {}) as Record<string, unknown>;
 				const raw = (typeof cfg.docker === 'object' && cfg.docker !== null ? cfg.docker : {}) as Record<string, unknown>;
+				// the fs sandbox config rides along: docker.cp jails its host-side
+				// paths in the same root the fs builtin uses
+				const fsRaw = (typeof cfg.fs === 'object' && cfg.fs !== null ? cfg.fs : {}) as Record<string, unknown>;
 				return {
 					enabled: raw.enabled === true,
 					host: typeof raw.host === 'string' ? raw.host : undefined,
@@ -496,7 +499,9 @@ export class Evaluator {
 					defaultImage: typeof raw.defaultImage === 'string' ? raw.defaultImage : 'debian:bookworm',
 					allowedVolumePaths: Array.isArray(raw.allowedVolumePaths) ? raw.allowedVolumePaths.map(String) : undefined,
 					bindAddress: typeof raw.bindAddress === 'string' ? raw.bindAddress : undefined,
-					volumeRoot: typeof raw.volumeRoot === 'string' && raw.volumeRoot.length > 0 ? raw.volumeRoot : undefined
+					volumeRoot: typeof raw.volumeRoot === 'string' && raw.volumeRoot.length > 0 ? raw.volumeRoot : undefined,
+					fsRoot: typeof fsRaw.root === 'string' && fsRaw.root.length > 0 ? fsRaw.root : undefined,
+					fsMaxFileSize: typeof fsRaw.maxFileSize === 'number' ? fsRaw.maxFileSize : undefined
 				};
 			})
 		);

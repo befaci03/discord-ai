@@ -5,7 +5,7 @@
 // through validation before touching the CLI. fuck docker but better than hell lmao
 
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, realpathSync, rmSync, statSync, type Stats } from 'node:fs';
 import * as path from 'node:path';
 import { RuntimeError } from '../evaluator.js';
 
@@ -31,6 +31,10 @@ export interface DockerPolicy {
 	 * allowed_volume_paths entry (the sandbox is the trust root).
 	 */
 	volumeRoot?: string;
+	/** sandbox root (config agent.toolang.fs.root): docker.cp jail for host-side paths */
+	fsRoot?: string;
+	/** max bytes for a file crossing docker.cp (config agent.toolang.fs.maxFileSize) */
+	fsMaxFileSize?: number;
 }
 
 function drun(cmdArgs: string[], host?: string, input?: string): { stdout: string; stderr: string; exitCode: number } {
@@ -46,6 +50,60 @@ function drun(cmdArgs: string[], host?: string, input?: string): { stdout: strin
 }
 
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
+
+/**
+ * Quote-aware argv split for docker.run: single/double quotes group words and
+ * backslash escapes the next char, then the argv goes to exec as-is. NO shell
+ * is spawned either way, this only decides where one argument ends.
+ * The old whitespace-only split chopped `sh -c 'echo "a b"'` into pieces and
+ * the container's shell answered with "unterminated quoted string".
+ */
+export function splitArgv(cmd: string): string[] {
+	const out: string[] = [];
+	let cur = '';
+	let started = false;
+	let quote: string | null = null;
+	for (let i = 0; i < cmd.length; i++) {
+		const ch = cmd[i];
+		if (quote !== null) {
+			if (ch === quote) {
+				quote = null;
+				continue;
+			}
+			// inside double quotes a backslash escapes the next char; single
+			// quotes keep everything literal, exactly like sh
+			if (quote === '"' && ch === '\\' && i + 1 < cmd.length) {
+				cur += cmd[++i];
+				continue;
+			}
+			cur += ch;
+			continue;
+		}
+		if (ch === "'" || ch === '"') {
+			quote = ch;
+			started = true;
+			continue;
+		}
+		if (ch === '\\' && i + 1 < cmd.length) {
+			cur += cmd[++i];
+			started = true;
+			continue;
+		}
+		if (/\s/.test(ch)) {
+			if (started) {
+				out.push(cur);
+				cur = '';
+				started = false;
+			}
+			continue;
+		}
+		cur += ch;
+		started = true;
+	}
+	if (quote !== null) throw new RuntimeError(`docker.run: unbalanced ${quote} quote in command (close it, or escape it with a backslash)`);
+	if (started) out.push(cur);
+	return out;
+}
 
 function checkName(name: unknown, op: string): string {
 	if (typeof name !== 'string' || !NAME_RE.test(name)) throw new RuntimeError(`docker.${op}: invalid container name '${String(name).slice(0, 40)}'`);
@@ -130,6 +188,42 @@ function checkContainerPath(container: unknown, op: string): string {
 		throw new RuntimeError(`docker.${op}: container path '${c.slice(0, 60)}' must be absolute (letters, digits, _ . - / only, no '..')`);
 	}
 	return c;
+}
+
+/**
+ * Resolve a docker.cp host-side path inside the SANDBOX root (config
+ * agent.toolang.fs.root): relative paths resolve inside it, absolute ones must
+ * already be under it, and no ancestor may be a symlink pointing out of it.
+ * Same jail rules as the fs builtin, so both sides of a copy agree.
+ */
+function resolveSandboxPath(p: string, policy: DockerPolicy, op: string): string {
+	const root = typeof policy.fsRoot === 'string' && policy.fsRoot ? path.resolve(policy.fsRoot) : '';
+	if (!root) throw new RuntimeError(`docker.${op}: sandbox file access is unavailable (no fs root configured)`);
+	if (typeof p !== 'string' || p.length === 0) throw new RuntimeError(`docker.${op}: sandbox path must be a non-empty string`);
+	if (p.includes('\0')) throw new RuntimeError(`docker.${op}: null bytes are not allowed in paths`);
+	const abs = path.resolve(root, p);
+	const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
+	if (!abs.startsWith(rootWithSep)) {
+		throw new RuntimeError(`docker.${op}: sandbox path '${p.slice(0, 60)}' must stay inside '${root}'`);
+	}
+	// walk existing ancestors: a symlinked dir pointing outside would move the
+	// copy across the jail boundary
+	let cur = abs;
+	while (cur.startsWith(rootWithSep)) {
+		let st: Stats;
+		try {
+			st = lstatSync(cur);
+		} catch {
+			cur = path.dirname(cur);
+			continue;
+		}
+		if (st.isSymbolicLink()) {
+			const target = realpathSync(cur);
+			if (!target.startsWith(rootWithSep)) throw new RuntimeError(`docker.${op}: '${path.relative(root, cur)}' is a symlink pointing outside the sandbox`);
+		}
+		cur = path.dirname(cur);
+	}
+	return abs;
 }
 
 /** Volume ids are ONE path segment: no slashes, no leading dot (so no `..`). */
@@ -385,9 +479,11 @@ export function Docker(getPolicy: () => DockerPolicy): Record<string, Function> 
 			gate('run'); // fail fast, before checkName/argv work
 			const name = checkName(container, 'run');
 			if (typeof cmd !== 'string' || cmd.length === 0) throw new RuntimeError('docker.run: cmd must be a non-empty string');
-			// exec via argv array: ["exec", name, "sh", "-c", cmd] would allow shells,
-			// so we run the command directly without a shell
-			return d(['exec', name, ...cmd.trim().split(/\s+/)], 'run');
+			// exec via argv array (quotes only group words, no shell is spawned):
+			// ["exec", name, "sh", "-c", cmd] would allow shells on OUR side
+			const argv = splitArgv(cmd);
+			if (argv.length === 0) throw new RuntimeError('docker.run: cmd must contain a command');
+			return d(['exec', name, ...argv], 'run');
 		},
 		create: (name: string, imageOrConfig?: string | DockerConfig, maybeConfig?: DockerConfig) => {
 			const policy = gate('create');
@@ -440,6 +536,60 @@ export function Docker(getPolicy: () => DockerPolicy): Record<string, Function> 
 		lsdir: (container: string, p: string, recursive?: boolean) => d(['exec', checkName(container, 'lsdir'), 'ls', ...(recursive ? ['-R'] : []), checkPath(p, 'lsdir')], 'lsdir'),
 		mvdir: (container: string, from: string, to: string) => d(['exec', checkName(container, 'mvdir'), 'mv', checkPath(from, 'mvdir'), checkPath(to, 'mvdir')], 'mvdir'),
 
+		/**
+		 * Copy ONE file between the sandbox and a container (`docker cp`, argv
+		 * only). The direction comes from the argument shapes: the absolute
+		 * side is the container path, the other side is relative to the
+		 * sandbox root (jailed by resolveSandboxPath). Sizes crossing the
+		 * boundary are capped by fs.maxFileSize.
+		 */
+		cp: (container: string, source: string, destination: string) => {
+			const policy = gate('cp');
+			const name = checkName(container, 'cp');
+			const src = typeof source === 'string' ? source : '';
+			const dst = typeof destination === 'string' ? destination : '';
+			if (src.length === 0 || dst.length === 0) throw new RuntimeError('docker.cp: source and destination must be non-empty strings');
+			const srcAbsolute = src.startsWith('/');
+			const dstAbsolute = dst.startsWith('/');
+			if (srcAbsolute === dstAbsolute) {
+				throw new RuntimeError(
+					srcAbsolute
+						? 'docker.cp: both sides are absolute; the sandbox side must be relative to the sandbox root (e.g. site/index.html)'
+						: 'docker.cp: no container path given; the container side must be absolute (e.g. /usr/share/nginx/html/index.html)'
+				);
+			}
+			const cap = policy.fsMaxFileSize ?? 1_000_000;
+			if (srcAbsolute) {
+				// container -> sandbox
+				const cpath = checkContainerPath(src, 'cp');
+				const host = resolveSandboxPath(dst, policy, 'cp');
+				mkdirSync(path.dirname(host), { recursive: true });
+				const res = d(['cp', `${name}:${cpath}`, host], 'cp');
+				if (res.exitCode !== 0) return res;
+				// the container could hand back a multi-GB file: cap what lands in
+				// the sandbox, and take it back out when it overflowed
+				let size = 0;
+				try {
+					size = statSync(host).size;
+				} catch {
+					return res; /* stat hiccup after a successful copy: keep the file */
+				}
+				if (size > cap) {
+					rmSync(host, { force: true });
+					throw new RuntimeError(`docker.cp: copied file is too large (${size} > ${cap} bytes)`);
+				}
+				return res;
+			}
+			// sandbox -> container
+			const cpath = checkContainerPath(dst, 'cp');
+			const host = resolveSandboxPath(src, policy, 'cp');
+			if (existsSync(host)) {
+				const size = statSync(host).size;
+				if (size > cap) throw new RuntimeError(`docker.cp: file is too large (${size} > ${cap} bytes)`);
+			}
+			return d(['cp', host, `${name}:${cpath}`], 'cp');
+		},
+
 		recreate: (container: string) => {
 			const policy = gate('recreate');
 			const name = checkName(container, 'recreate');
@@ -482,6 +632,29 @@ export function Docker(getPolicy: () => DockerPolicy): Record<string, Function> 
 			config.volumes = [...existing, { volume, container: target }];
 			const args = buildCreateArgs(name, config, policy, 'attach');
 			return replace('attach', name, args);
+		},
+
+		/**
+		 * Drop an AGENT VOLUME mount again: identify it by its id (the same
+		 * single argument used to mount it), read the config back, drop every
+		 * bind pointing at <volumeRoot>/<id> (optionally only the one at
+		 * `containerPath`), then the usual validate-before-destroy replace
+		 * finished with a start so the container comes back up unmounted.
+		 */
+		detach: (container: string, volume: string, containerPath?: string) => {
+			const policy = gate('detach');
+			const name = checkName(container, 'detach');
+			const hostDir = resolveAgentVolume(volume, policy, 'detach');
+			const target = typeof containerPath === 'string' && containerPath.trim() ? checkContainerPath(containerPath, 'detach') : '';
+			const config = inspectConfig('detach', name);
+			const existing = config.volumes ?? [];
+			const kept = existing.filter((b) => !(b.host === hostDir && (target === '' || b.container === target)));
+			if (kept.length === existing.length) {
+				throw new RuntimeError(`docker.detach: volume '${volume}' is not mounted on '${name}'${target ? ` at '${target}'` : ''}`);
+			}
+			config.volumes = kept;
+			const args = buildCreateArgs(name, config, policy, 'detach');
+			return replace('detach', name, args);
 		}
 	};
 }

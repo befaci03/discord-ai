@@ -5,7 +5,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { loadConfig, resetConfigCache } from '../utils/config.js';
+import { loadConfig, resetConfigCache, DEFAULT_CONFIG } from '../utils/config.js';
 
 describe('config key mapping', () => {
 	beforeEach(() => resetConfigCache());
@@ -128,25 +128,41 @@ describe('[agent.brain] validation', () => {
 	});
 
 	test('[agent] execution knobs ship with the documented defaults', () => {
+		// compared against the defaults object instead of literals: tuning a
+		// default must never require touching this test again
 		const ex = loadConfig('example.config.toml');
-		expect(ex.agent.promptFileMaxChars).toBe(24000);
-		expect(ex.agent.toolRounds).toBe(16);
-		expect(ex.agent.maxTokens).toBe(0);
+		expect(ex.agent.promptFileMaxChars).toBe(DEFAULT_CONFIG.agent.promptFileMaxChars);
+		expect(ex.agent.toolRounds).toBe(DEFAULT_CONFIG.agent.toolRounds);
+		expect(ex.agent.toolCallsPerRound).toBe(DEFAULT_CONFIG.agent.toolCallsPerRound);
+		expect(ex.agent.maxTokens).toBe(DEFAULT_CONFIG.agent.maxTokens);
 	});
 
-	test('[agent].tool_rounds clamps to 1..64, junk falls back to 16', () => {
+	test('[agent].tool_rounds clamps to 2..192, junk falls back to the default', () => {
 		expect(loadWith('[agent]\ntool_rounds = 7\n').agent.toolRounds).toBe(7);
-		expect(loadWith('[agent]\ntool_rounds = 999\n').agent.toolRounds).toBe(64);
-		expect(loadWith('[agent]\ntool_rounds = 0\n').agent.toolRounds).toBe(16);
-		expect(loadWith('[agent]\ntool_rounds = "lots"\n').agent.toolRounds).toBe(16);
+		expect(loadWith('[agent]\ntool_rounds = 999\n').agent.toolRounds).toBe(192);
+		expect(loadWith('[agent]\ntool_rounds = 1\n').agent.toolRounds).toBe(2);
+		expect(loadWith('[agent]\ntool_rounds = 0\n').agent.toolRounds).toBe(DEFAULT_CONFIG.agent.toolRounds);
+		expect(loadWith('[agent]\ntool_rounds = "lots"\n').agent.toolRounds).toBe(DEFAULT_CONFIG.agent.toolRounds);
 	});
 
-	test('[agent] prompt budget and output cap clamp', () => {
-		// a tiny cap would silently eat every persona: floor it at 1000
-		expect(loadWith('[agent]\nprompt_file_max_chars = 500\n').agent.promptFileMaxChars).toBe(1000);
-		expect(loadWith('[agent]\nprompt_file_max_chars = 9999999\n').agent.promptFileMaxChars).toBe(120000);
+	test('[agent].tool_calls_per_round clamps to 1..15', () => {
+		expect(loadWith('[agent]\ntool_calls_per_round = 5\n').agent.toolCallsPerRound).toBe(5);
+		expect(loadWith('[agent]\ntool_calls_per_round = 999\n').agent.toolCallsPerRound).toBe(15);
+		expect(loadWith('[agent]\ntool_calls_per_round = 0\n').agent.toolCallsPerRound).toBe(DEFAULT_CONFIG.agent.toolCallsPerRound);
+		expect(loadWith('[agent]\ntool_calls_per_round = "lots"\n').agent.toolCallsPerRound).toBe(DEFAULT_CONFIG.agent.toolCallsPerRound);
+	});
+
+	test('[agent] prompt budget is unclamped (0 = unlimited), output cap stops at 5M', () => {
+		// 0 = read the whole persona file: no floor eats small files, no
+		// ceiling surprises a long one, junk falls back to the default
+		expect(loadWith('[agent]\nprompt_file_max_chars = 500\n').agent.promptFileMaxChars).toBe(500);
+		expect(loadWith('[agent]\nprompt_file_max_chars = 0\n').agent.promptFileMaxChars).toBe(0);
+		expect(loadWith('[agent]\nprompt_file_max_chars = 9999999\n').agent.promptFileMaxChars).toBe(9999999);
+		expect(loadWith('[agent]\nprompt_file_max_chars = -5\n').agent.promptFileMaxChars).toBe(DEFAULT_CONFIG.agent.promptFileMaxChars);
+		expect(loadWith('[agent]\nprompt_file_max_chars = "lots"\n').agent.promptFileMaxChars).toBe(DEFAULT_CONFIG.agent.promptFileMaxChars);
 		expect(loadWith('[agent]\nmax_tokens = -5\n').agent.maxTokens).toBe(0);
 		expect(loadWith('[agent]\nmax_tokens = 4096\n').agent.maxTokens).toBe(4096);
+		expect(loadWith('[agent]\nmax_tokens = 99999999\n').agent.maxTokens).toBe(5_000_000);
 		expect(loadWith('[agent]\nmax_tokens = "huge"\n').agent.maxTokens).toBe(0);
 	});
 

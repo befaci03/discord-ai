@@ -51,7 +51,7 @@ export function environmentBlock(config: AppConfig, opts: EnvInfoOptions = {}): 
 		lines.push(
 			`- docker: ON. Host ports you may publish: ${ports} (bound to ${d.bindAddress}: loopback = only this machine reaches them). A port must fall inside one of those ranges; 0 = publish no port. ` +
 				`Host paths you may mount into containers: ${mounts}. ` +
-				`Your volumes: give a volume id and it resolves to ${config.agent.toolang.fs.root}/.docker-vols/<volume_id> (mount with the volume/volume_path args on docker_create, or docker_manage action=mount); the sandbox store needs no allowed_volume_paths entry. ` +
+				`Volumes (a volume id is ALL you ever pass): mount = volume=<volume_id> + volume_path=<container path> on docker_create or docker_manage action=mount (the id lives in ${config.agent.toolang.fs.root}/.docker-vols/<volume_id>, no allowlist entry needed); access = docker_exec at that container path, or read/write the same files directly at sandbox/.docker-vols/<volume_id>; unmount = docker_manage action=unmount volume=<volume_id>. ` +
 				`Max containers: ${d.maxContainers}. Default image: ${d.defaultImage}. Blocked image prefixes: ${d.disallowedImages.join(', ') || 'none'}` +
 				`${d.allowedImages && d.allowedImages.length > 0 ? `. Allowed images: ${d.allowedImages.join(', ')}` : ''}.`
 		);
@@ -140,7 +140,9 @@ export function environmentBlock(config: AppConfig, opts: EnvInfoOptions = {}): 
 	);
 
 	// budgets + dashboard
-	lines.push(`- tool budget: a single call times out after ${t.toolTimeoutMs}ms and its result reaches you truncated at 40k chars.`);
+	lines.push(
+		`- tool budget: up to ${config.agent.toolCallsPerRound} tool calls run per round, a single call times out after ${t.toolTimeoutMs}ms and its result reaches you truncated at 40k chars.`
+	);
 	lines.push(`- dashboard: http://${publicHost(config.http.host)}:${config.http.port} (private, passcode protected).`);
 	lines.push(`- addons active: ${[...active].join(', ') || 'none'}.`);
 

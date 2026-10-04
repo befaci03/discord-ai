@@ -20,7 +20,9 @@ export default class extends Brain implements Agent {
 		private maxToolRoundtrips = 16,
 		log?: Logger,
 		/** [agent].max_tokens: 0 = leave the output cap to the provider */
-		private maxOutputTokens = 0
+		private maxOutputTokens = 0,
+		/** [agent].tool_calls_per_round: how many calls run per round (1..15) */
+		private maxCallsPerRound = 10
 	) {
 		super(db, tools);
 		this.prov = new OpenAI({ apiKey: api.apiKey, baseURL: api.baseUrl || undefined });
@@ -75,16 +77,23 @@ export default class extends Brain implements Agent {
 					break;
 				}
 
+				// per-round call budget [agent].tool_calls_per_round: the first N
+				// run, the rest get a "deferred" answer (every id must be answered)
+				// so the model re-issues them next round instead of losing them
+				const cap = Math.min(Math.max(this.maxCallsPerRound, 1), 15);
+				const runnable = choice.tool_calls.slice(0, cap);
+				const deferred = choice.tool_calls.slice(cap);
+
 				// progress hook (Discord "Executing ..." message): per round, before
 				// the calls run, and never allowed to break the tool loop
 				try {
-					opts?.onToolCall?.(choice.tool_calls.filter((c) => c.type === 'function').map((c) => c.function.name));
+					opts?.onToolCall?.(runnable.filter((c) => c.type === 'function').map((c) => c.function.name));
 				} catch {
 					/* a broken progress hook must not eat the answer */
 				}
 
 				messages.push(choice);
-				for (const call of choice.tool_calls) {
+				for (const call of runnable) {
 					if (call.type !== 'function') continue;
 					const tool = callable.find((t) => t.name === call.function.name);
 					let content: string;
@@ -97,6 +106,14 @@ export default class extends Brain implements Agent {
 						content = this.toolResultText({ error: err instanceof Error ? err.message : String(err) });
 					}
 					messages.push({ role: 'tool', tool_call_id: call.id, content });
+				}
+				for (const call of deferred) {
+					if (call.type !== 'function') continue;
+					messages.push({
+						role: 'tool',
+						tool_call_id: call.id,
+						content: this.toolResultText({ deferred: `per-round call budget (${cap} executed of ${choice.tool_calls.length}): re-issue this call in your next round` })
+					});
 				}
 			}
 			// budget exhausted without a text answer: one last call, tools removed,

@@ -51,7 +51,9 @@ async function failureOf(name: string, args: Record<string, unknown>): Promise<s
 
 describe('tool discovery', () => {
 	test('docker tools ship next to the regular ones', () => {
-		expect(registry.names()).toEqual(expect.arrayContaining(['fetch_json', 'web_search', 'server_stats', 'sandbox_write', 'docker_list', 'docker_exec', 'docker_create', 'docker_manage']));
+		expect(registry.names()).toEqual(
+			expect.arrayContaining(['fetch_json', 'web_search', 'server_stats', 'sandbox_write', 'docker_list', 'docker_exec', 'docker_create', 'docker_manage', 'docker_cp'])
+		);
 	});
 });
 
@@ -64,9 +66,13 @@ describe('LLM exposure', () => {
 			properties: { url: { type: 'string', description: 'The URL to fetch (must be http/https)' } },
 			required: ['url']
 		});
-		// a tool with several header args keeps them all required
+		// append/overwrite are OPTIONAL: production logs showed "Missing required
+		// argument: append" four turns in a row because the model omitted a flag
 		const write = defs.find((d) => d.name === 'sandbox_write');
-		expect((write?.parameters?.required ?? []) as string[]).toEqual(['path', 'content', 'append']);
+		expect((write?.parameters?.required ?? []) as string[]).toEqual(['path', 'content']);
+		const wprops = (write?.parameters?.properties ?? {}) as Record<string, unknown>;
+		expect(wprops.append).toBeDefined();
+		expect(wprops.overwrite).toBeDefined();
 	});
 
 	test("optional header args stay out of the schema's required list", () => {
@@ -82,6 +88,9 @@ describe('LLM exposure', () => {
 		expect(props.volume_path).toBeDefined();
 		const create = defs.find((d) => d.name === 'docker_create');
 		expect(create?.parameters?.required).toEqual(['name', 'image', 'port']);
+		// docker_cp mirrors the real docker cp argument order: all required
+		const cp = defs.find((d) => d.name === 'docker_cp');
+		expect(cp?.parameters?.required).toEqual(['container', 'source', 'destination']);
 	});
 
 	test('docker tools are hidden while [docker].enabled is false', () => {
@@ -91,7 +100,7 @@ describe('LLM exposure', () => {
 
 		config.docker.enabled = true; // ctx holds the same config object
 		const shown = registryToAgentTools(registry, ctx, db);
-		expect(shown.map((d) => d.name)).toEqual(expect.arrayContaining(['docker_list', 'docker_exec', 'docker_create', 'docker_manage']));
+		expect(shown.map((d) => d.name)).toEqual(expect.arrayContaining(['docker_list', 'docker_exec', 'docker_create', 'docker_manage', 'docker_cp']));
 		expect(shown.find((d) => d.name === 'docker_list')?.parameters).toEqual({ type: 'object', properties: {}, required: [] });
 	});
 
@@ -124,6 +133,7 @@ describe('docker gate', () => {
 		expect(await failureOf('docker_manage', { container: 'web', action: 'stop' })).toContain('docker is disabled');
 		expect(await failureOf('docker_exec', { container: 'web', command: 'ls' })).toContain('docker is disabled');
 		expect(await failureOf('docker_create', { name: 'web', image: 'nginx:alpine', port: 0 })).toContain('docker is disabled');
+		expect(await failureOf('docker_cp', { container: 'web', source: 'index.html', destination: '/usr/share/nginx/html/index.html' })).toContain('docker is disabled');
 	});
 
 	test('the tool itself rejects a bogus action before touching docker', async () => {
@@ -174,28 +184,34 @@ describe('buildAgent wiring', () => {
 		if (extra) expect(brain.sys_prompt).toContain(extra.slice(0, 60));
 	});
 
-	test('tool rounds and output cap come from [agent], not a hardcoded 4', async () => {
+	test('tool rounds, calls per round and output cap come from [agent], not hardcoded values', async () => {
 		const cfg: AppConfig = {
 			...config,
 			agent: {
 				...config.agent,
 				toolRounds: 7,
+				toolCallsPerRound: 3,
 				maxTokens: 1234,
 				providers: { openai: { api_type: 1, base_url: 'https://api.openai.com/v1', api_key: 'sk-test' } },
 				models: { ...config.agent.models, default_model: { provider: 'openai', model: 'gpt-test' } }
 			}
 		};
 		const agent = buildAgent(db, cfg, registryToAgentTools(registry, ctx, db), new Logger('error'));
-		const internals = agent as unknown as { maxToolRoundtrips: number; maxOutputTokens: number; sys_prompt: string };
+		const internals = agent as unknown as { maxToolRoundtrips: number; maxOutputTokens: number; maxCallsPerRound: number; sys_prompt: string };
 		expect(internals.maxToolRoundtrips).toBe(7);
+		expect(internals.maxCallsPerRound).toBe(3);
 		expect(internals.maxOutputTokens).toBe(1234);
 		// the strict rules ride along in the system prompt, with the real budget
 		expect(internals.sys_prompt).toContain('### Operating rules (orders, not suggestions)');
 		expect(internals.sys_prompt).toContain('Tool rounds per turn are limited (7)');
+		expect(internals.sys_prompt).toContain('Up to 3 tool calls execute per round');
 		expect(internals.sys_prompt).toContain('Never claim a result you did not verify');
+		// ghost-tool and typed-markup lessons from production logs
+		expect(internals.sys_prompt).toContain('Your tool list is exhaustive');
+		expect(internals.sys_prompt).toContain('never produce it');
 	});
 
-	test('the default build runs with 16 rounds and provider-chosen tokens', async () => {
+	test('a default build takes its rounds and token cap from config (value-proof)', async () => {
 		const cfg: AppConfig = {
 			...config,
 			agent: {
@@ -205,8 +221,10 @@ describe('buildAgent wiring', () => {
 			}
 		};
 		const agent = buildAgent(db, cfg, registryToAgentTools(registry, ctx, db), new Logger('error'));
-		const internals = agent as unknown as { maxToolRoundtrips: number; maxOutputTokens: number };
-		expect(internals.maxToolRoundtrips).toBe(16);
+		const internals = agent as unknown as { maxToolRoundtrips: number; maxOutputTokens: number; maxCallsPerRound: number };
+		// whatever the example/config ships flows through: no magic numbers
+		expect(internals.maxToolRoundtrips).toBe(cfg.agent.toolRounds);
+		expect(internals.maxCallsPerRound).toBe(cfg.agent.toolCallsPerRound);
 		expect(internals.maxOutputTokens).toBe(0);
 	});
 });
@@ -219,6 +237,9 @@ describe('persona file cap', () => {
 		expect(readPromptFile(file, 24_000, log)).toHaveLength(24_000);
 		writeFileSync(file, 'short persona');
 		expect(readPromptFile(file, 24_000, log)).toBe('short persona');
+		// cap 0 = unlimited: the whole file passes through
+		writeFileSync(file, 'x'.repeat(30_000));
+		expect(readPromptFile(file, 0, log)).toHaveLength(30_000);
 		// a missing file is not an error: the bot runs without one
 		expect(readPromptFile(path.join(dir, 'nope.txt'), 24_000, log)).toBe('');
 	});
@@ -284,5 +305,58 @@ describe('volume wiring (config to store)', () => {
 		expect(msg).toContain('disallowed'); // volume resolved, image refused
 		expect(msg).not.toContain('unavailable'); // ...with the store configured
 		expect(statSync(path.join(sandboxRoot, '.docker-vols', 'wiredvol')).isDirectory()).toBe(true);
+	});
+});
+
+describe('sandbox_write semantics (append/overwrite)', () => {
+	// the production failure loop this fixes: "Missing required argument:
+	// append" four turns in a row, then EEXIST with no way to replace the file
+	let reg: ToolRegistry;
+	let localCtx: ToolContext;
+	let swSandbox: string; // set in beforeEach: `dir` only exists after beforeAll
+
+	const failLocal = async (name: string, args: Record<string, unknown>): Promise<string> => {
+		try {
+			await runTool(reg, name, args, localCtx);
+		} catch (err) {
+			return (err as Error).message;
+		}
+		return '';
+	};
+
+	beforeEach(() => {
+		swSandbox = path.join(dir, 'swrite-sandbox');
+		const cfg: AppConfig = {
+			...config,
+			agent: { ...config.agent, toolang: { ...config.agent.toolang, fs: { ...config.agent.toolang.fs, root: swSandbox } } }
+		};
+		reg = new ToolRegistry(cfg);
+		reg.loadAll();
+		localCtx = { config: cfg, log: () => undefined };
+		rmSync(swSandbox, { recursive: true, force: true });
+	});
+
+	test('path+content alone writes, overwrite replaces, append extends', async () => {
+		// no append flag at all: omitting optional args must not fail validation
+		await runTool(reg, 'sandbox_write', { path: 'index.html', content: 'v1' }, localCtx);
+		expect(readFileSync(path.join(swSandbox, 'index.html'), 'utf-8')).toBe('v1');
+
+		// a second plain write fails WITH the remedy spelled out for the model
+		const err = await failLocal('sandbox_write', { path: 'index.html', content: 'v2' });
+		expect(err).toContain('already exists');
+		expect(err).toContain('overwrite=true');
+		expect(err).toContain('append');
+
+		// overwrite=true replaces it
+		await runTool(reg, 'sandbox_write', { path: 'index.html', content: 'v2', overwrite: true }, localCtx);
+		expect(readFileSync(path.join(swSandbox, 'index.html'), 'utf-8')).toBe('v2');
+
+		// append=true extends
+		await runTool(reg, 'sandbox_write', { path: 'index.html', content: '!', append: true }, localCtx);
+		expect(readFileSync(path.join(swSandbox, 'index.html'), 'utf-8')).toBe('v2!');
+	});
+
+	test('a bogus flag type is still rejected before the sandbox runs', async () => {
+		expect(await failLocal('sandbox_write', { path: 'a.txt', content: 'x', append: 'yes' })).toContain('must be a boolean');
 	});
 });

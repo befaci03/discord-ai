@@ -77,12 +77,14 @@ codec.uuid()               --= uuid v4
 
 Sandboxed filesystem: every path is jailed inside the configured root,
 symlinks pointing outside are refused, traversal (`..`) cannot escape.
-Writes require `allow_write = true` in config; `fs.write` never overwrites.
+Writes require `allow_write = true` in config; `fs.write` refuses to clobber
+an existing file unless `overwrite = true` is passed.
 
 ```tl
 fs.read(path)        fs.exists(path)     fs.list(path)
 fs.isDir(path)       fs.size(path)
-fs.write(path, text) fs.append(path, text)
+fs.write(path, text) fs.write(path, text, true) --= true, third arg overwrites
+fs.append(path, text)
 fs.mkdir(path)       fs.remove(path)     --= remove: files/empty dirs only
 fs.rmtree(path)      --= recursive, refuses the sandbox root itself
 ```
@@ -195,7 +197,8 @@ the image allow/deny lists and `max_containers`.
 
 ```tl
 docker.list() --= name, image and status of every container (tab separated)
-docker.run(container, cmd) --= exec command in container
+docker.run(container, cmd) --= exec command in container (quotes group words,
+                             --= e.g. sh -c 'echo a b'; argv only, no shell)
 docker.create(name, image, config?) --= create container
 docker.remove(container) --= force remove
 docker.start(container)
@@ -204,7 +207,26 @@ docker.stop(container)
 docker.recreate(container) --= validate, swap, start again
 docker.edit(container, config?) --= edit or recreate with new image
 docker.attach(container, volume, path) --= mount an agent volume (below) and start again
+docker.cp(container, source, destination) --= one file between sandbox and
+                             --= container (see below)
 ```
+
+### Copying files (docker.cp)
+
+`docker.cp` moves ONE file across the boundary. The direction comes from the
+argument shapes: the ABSOLUTE side is the container path, the other side is
+relative to the sandbox root (`fs.root`, jailed exactly like the fs builtin,
+symlinks pointing out are refused).
+
+```tl
+-- sandbox -> container
+docker.cp("nginx", "site/index.html", "/usr/share/nginx/html/index.html")
+-- container -> sandbox
+docker.cp("nginx", "/usr/share/nginx/html/index.html", "index.html")
+```
+
+Sizes crossing the boundary are capped by `fs.maxFileSize`: an oversized
+file is refused before the copy (out) and removed again after it (in).
 
 ### Config object for create/edit
 

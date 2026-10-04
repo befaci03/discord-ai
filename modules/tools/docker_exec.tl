@@ -1,6 +1,5 @@
 {
-	"name": "docker_exec",
-	"description": "Run a command inside a RUNNING container (argv only, no shell). Run docker_list first to get container names. Needs [docker].enabled = true",
+	"name": "docker_exec",		"description": "Run a command inside a RUNNING container (no host shell; quote args containing spaces, e.g. sh -c 'echo hi > /tmp/x'). Run docker_list first to get container names. Needs [docker].enabled = true",
 	"arguments": [
 		{
 			"type": "string",

@@ -21,7 +21,10 @@ function normStringList(value: unknown, cap: number): string[] {
 /** One capped line for a template/message: control chars stripped, "" allowed. */
 function cleanTemplate(value: unknown, fallback: string, allowEmpty: boolean): string {
 	if (typeof value !== 'string') return fallback;
-	const clean = value.replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 500);
+	const clean = value
+		.replace(/[\x00-\x1f\x7f]/g, ' ')
+		.trim()
+		.slice(0, 500);
 	return clean.length === 0 && !allowEmpty ? fallback : clean;
 }
 
@@ -56,12 +59,16 @@ export function validateConfig(cfg: AppConfig, defaults: AppConfig): void {
 			})
 	);
 
-	// [agent] execution knobs: .prompt.txt budget, tool rounds per ask, and the
-	// provider output cap (0 = let the provider decide; anthropic falls back
-	// to its own default because its API requires a number)
-	cfg.agent.promptFileMaxChars = Math.min(Math.max(Math.floor(Number(cfg.agent.promptFileMaxChars) || defaults.agent.promptFileMaxChars), 1_000), 120_000);
-	cfg.agent.toolRounds = Math.min(Math.max(Math.floor(Number(cfg.agent.toolRounds) || defaults.agent.toolRounds), 1), 64);
-	cfg.agent.maxTokens = Math.min(Math.max(Math.floor(Number(cfg.agent.maxTokens) || 0), 0), 128_000);
+	// [agent] execution knobs: .prompt.txt budget (0 = unlimited), tool rounds
+	// per ask, tool calls executed per round, and the provider output cap
+	// (0 = let the provider decide; anthropic falls back to its own default
+	// because its API requires a number)
+	const personaBudget = typeof cfg.agent.promptFileMaxChars === 'number' && Number.isFinite(cfg.agent.promptFileMaxChars) ? Math.floor(cfg.agent.promptFileMaxChars) : -1;
+	// deliberately unclamped: only negatives/junk fall back to the default
+	cfg.agent.promptFileMaxChars = personaBudget >= 0 ? personaBudget : defaults.agent.promptFileMaxChars;
+	cfg.agent.toolRounds = Math.min(Math.max(Math.floor(Number(cfg.agent.toolRounds) || defaults.agent.toolRounds), 2), 192);
+	cfg.agent.toolCallsPerRound = Math.min(Math.max(Math.floor(Number(cfg.agent.toolCallsPerRound) || defaults.agent.toolCallsPerRound), 1), 15);
+	cfg.agent.maxTokens = Math.min(Math.max(Math.floor(Number(cfg.agent.maxTokens) || 0), 0), 5_000_000);
 
 	// toolang limits get clamped, never trusted raw
 	const t = cfg.agent.toolang;

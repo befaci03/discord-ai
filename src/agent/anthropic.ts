@@ -21,7 +21,9 @@ export default class extends Brain implements Agent {
 		private maxToolRoundtrips = 16,
 		log?: Logger,
 		/** [agent].max_tokens: 0 = fall back to the API-safe default below */
-		private maxOutputTokens = 0
+		private maxOutputTokens = 0,
+		/** [agent].tool_calls_per_round: how many calls run per round (1..15) */
+		private maxCallsPerRound = 10
 	) {
 		super(db, tools);
 		this.prov = new Anthropic({ apiKey: api.apiKey, baseURL: api.baseUrl || undefined });
@@ -72,15 +74,20 @@ export default class extends Brain implements Agent {
 			for (let round = 0; round <= this.maxToolRoundtrips; round++) {
 				const toolUses = response.content.filter((b) => b.type === 'tool_use') as Anthropic.ToolUseBlock[];
 				if (toolUses.length === 0) break;
+				// per-round call budget [agent].tool_calls_per_round: the first N run,
+				// the rest get a "deferred" tool_result so every id stays answered
+				const cap = Math.min(Math.max(this.maxCallsPerRound, 1), 15);
+				const runnable = toolUses.slice(0, cap);
+				const deferred = toolUses.slice(cap);
 				// progress hook (Discord "Executing ..." message), same rules as openai.ts
 				try {
-					opts?.onToolCall?.(toolUses.map((u) => u.name));
+					opts?.onToolCall?.(runnable.map((u) => u.name));
 				} catch {
 					/* a broken progress hook must not eat the answer */
 				}
 				messages.push({ role: 'assistant', content: response.content });
 				const results: { type: 'tool_result'; tool_use_id: string; content: string }[] = [];
-				for (const use of toolUses) {
+				for (const use of runnable) {
 					let out: string;
 					try {
 						const tool = callable.find((t) => t.name === use.name);
@@ -91,6 +98,13 @@ export default class extends Brain implements Agent {
 						out = this.toolResultText({ error: err instanceof Error ? err.message : String(err) });
 					}
 					results.push({ type: 'tool_result', tool_use_id: use.id, content: out });
+				}
+				for (const use of deferred) {
+					results.push({
+						type: 'tool_result',
+						tool_use_id: use.id,
+						content: JSON.stringify({ deferred: `per-round call budget (${cap} executed of ${toolUses.length}): re-issue this call in your next round` })
+					});
 				}
 				messages.push({ role: 'user', content: results });
 				// the final roundtrips drop the tools, so the model must answer in text

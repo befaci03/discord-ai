@@ -144,9 +144,10 @@ from the config:
 [agent]
 prompt = "You are a helpful Discord agent."
 # .prompt.txt in the project root is appended right after this
-prompt_file_max_chars = 24000 # cap for .prompt.txt (clamp 1000..120000)
-tool_rounds = 16              # tool-call rounds per ask (clamp 1..64)
-max_tokens = 0                # output tokens per call; 0 = provider default
+prompt_file_max_chars = 24000 # cap for .prompt.txt (0 = read the whole file)
+tool_rounds = 24              # tool-call rounds per ask (clamp 2..192)
+tool_calls_per_round = 10     # tool calls executed per round (clamp 1..15)
+max_tokens = 0                # output tokens per call; 0 = provider default (max 5M)
 
 [agent.brain]
 memory = 30        # remembered conversation turns (0 = none, clamped to 0..200)

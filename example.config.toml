@@ -100,15 +100,19 @@ allow_env_access = false         # never enable this unless you know why
 name = "Agent"
 prompt = "You are a helpful Discord agent." # prepended to the system prompt
 # optional: .prompt.txt in the project root is appended right after the prompt
-# (capped at prompt_file_max_chars). Handy for "how the agent talks" without
+# (capped at prompt_file_max_chars, 0 = read the whole file). Handy for
+# "how the agent talks" without
 # touching config. The built-in operating rules are NOT configurable on
 # purpose: they enforce real tool calls and verified results.
-prompt_file_max_chars = 24000 # clamp 1000..120000
+prompt_file_max_chars = 24000 # 0 = unlimited (no clamp)
 # tool-call rounds per ask before the model is forced to give a text answer
-tool_rounds = 16 # clamp 1..64
+tool_rounds = 24 # clamp 2..192
+# tool calls executed per round; extra calls in the same round are asked to
+# re-issue on the next one (batch independent calls together)
+tool_calls_per_round = 10 # clamp 1..15
 # output tokens per provider call; 0 = provider default (anthropic falls back
 # to 4096, its API requires a number)
-max_tokens = 0 # clamp 0..128000
+max_tokens = 0 # clamp 0..5000000
 
 [agent.brain]
 # the agent's brain: rolling conversation memory + what it starts out liking.

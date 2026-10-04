@@ -82,7 +82,11 @@
   private or an explicit `0.0.0.0`. `recreate`/`edit` now validate the whole
   replacement (image, ports, mounts, extra args, cap) BEFORE the old
   container is stopped and removed: a refused port no longer costs the
-  operator their container. While docker is off the `docker_*` tools are not
+  operator their container. `docker.cp` moves one file across the
+  sandbox/container boundary with argv only (no shell): the container side
+  must be an absolute path, the sandbox side resolves inside `fs.root` (the
+  same jail as the fs builtin, symlink escapes refused) and sizes are capped
+  by `fs.maxFileSize`, so a container cannot flood the disk. While docker is off the `docker_*` tools are not
   even offered to the model;
   if they do get called (`!docker_list`), they fail with an explicit "docker
   is disabled" error instead of a silent no-op.

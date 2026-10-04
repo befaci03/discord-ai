@@ -1,6 +1,6 @@
 {
 	"name": "docker_manage",
-	"description": "Start, stop, restart, remove or recreate a container, or mount one of your sandbox volumes into an existing one (action=mount: the volume id lives in sandbox/.docker-vols/<volume_id>; the container is recreated and started with the mount). Needs [docker].enabled = true",
+	"description": "Start, stop, restart, remove or recreate a container, or mount/unmount one of your sandbox volumes (action=mount / action=unmount: pass only the volume id, it lives in sandbox/.docker-vols/<volume_id>; the container is recreated and started either way). Needs [docker].enabled = true",
 	"arguments": [
 		{
 			"type": "string",
@@ -11,20 +11,20 @@
 		{
 			"type": "string",
 			"name": "action",
-			"description": "one of: start, stop, restart, remove, recreate, mount",
+			"description": "one of: start, stop, restart, remove, recreate, mount, unmount",
 			"disallow": []
 		},
 		{
 			"type": "string",
 			"name": "volume",
-			"description": "action=mount only: sandbox volume id (stored in sandbox/.docker-vols/<id>); pass \"\" for every other action",
+			"description": "action=mount/unmount only: the sandbox volume id (stored in sandbox/.docker-vols/<id>); pass \"\" for every other action",
 			"disallow": [],
 			"optional": true
 		},
 		{
 			"type": "string",
 			"name": "volume_path",
-			"description": "action=mount only: container path to mount at, e.g. /var/lib/data (\"\" = /data); pass \"\" for every other action",
+			"description": "action=mount: container path to mount at (\"\" = /data). action=unmount: optional, only unmount at this path (\"\" = every mount of that volume). Pass \"\" otherwise.",
 			"disallow": [],
 			"optional": true
 		}
@@ -81,4 +81,14 @@ throw("mount failed: {1}".format([res.stderr]))
 close
 return("volume {1} mounted at {2} on {3}: container recreated and started".format([args.volume, mnt, args.container]))
 close
-throw("docker_manage: action must be one of start, stop, restart, remove, recreate, mount")
+if args.action == "unmount" then
+if args.volume == "" then
+throw("docker_manage: action 'unmount' needs the same volume id you passed to mount")
+close
+res = docker.detach(args.container, args.volume, args.volume_path)
+if res.exitCode != 0 then
+throw("unmount failed: {1}".format([res.stderr]))
+close
+return("volume {1} unmounted from {2}: container recreated and started".format([args.volume, args.container]))
+close
+throw("docker_manage: action must be one of start, stop, restart, remove, recreate, mount, unmount")

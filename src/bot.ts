@@ -12,6 +12,7 @@ import { AddonRegistry } from './modules/addons.js';
 import { ToolContext } from './modules/types.js';
 import { LiveBus } from './dashboard/live.js';
 import { ExecutionStatus, ExecMessageLike } from './execution.js';
+import { detectFakeToolCalls, stripFakeToolCalls } from './agent/fakecalls.js';
 import Agent, { Tool } from './agent/struct.js';
 
 export interface BotDeps {
@@ -158,6 +159,23 @@ export async function startBot(deps: BotDeps): Promise<Client> {
 				await exec.end();
 			}
 			if (typeof reply === 'string' && reply.length > 0) {
+				// fake tool calls typed into the text: never shown to the user,
+				// flagged in the log/audit so the operator sees the model slipping
+				const knownTool = (n: string): boolean => tools.has(n) || /^(brain|manage|tunnel|cron|github|smtp|email)_/.test(n);
+				const detected = detectFakeToolCalls(reply, knownTool);
+				if (detected.length > 0) {
+					log.warn(`model wrote ${detected.length} text-style tool call(s) as plain text (${detected.slice(0, 5).join(', ')}): stripped from the reply`);
+					try {
+						await db.audit({ actor_id: message.author.id, action: 'agent.reply_fake_tool_calls', target: detected.slice(0, 10).join(','), details: '{}' });
+					} catch {
+						/* metrics only */
+					}
+					reply = stripFakeToolCalls(reply, knownTool);
+					if (reply.trim().length === 0) {
+						log.warn('reply contained only fake tool calls: nothing was posted to the channel');
+						return;
+					}
+				}
 				await message.reply({ content: reply.slice(0, 2000), allowedMentions: NO_PINGS });
 				await db.audit({ actor_id: message.author.id, action: 'agent.reply', target: 'chat', details: '{}' });
 				// persisted so memory survives a restart (Brain.bootstraps from this)
