@@ -10,6 +10,16 @@ status = "watching the server burn" # presence text
 # [TOOL_NAME] is replaced with the tool(s) being called. "" = never post it.
 execution_message = ":thinking: *Executing `[TOOL_NAME]`...*"
 
+[general.errors]
+# wording for the failures the bot posts in chat (each capped at 500 chars).
+# only {error} (user-safe inner message) and {service} (provider name) are
+# substituted: raw internal errors/stack traces never appear here.
+generic = "Something went wrong. The details are in the logs."
+tool = "tool error: {error}"                                   # {error} = the user-safe reason
+external = ""                                                  # provider outages; "" = use generic
+# e.g. "{service} is unreachable, try again in a moment."
+provider = "no LLM provider configured. Set [agent.providers] + [agent.models] in config.toml (and the API key env var)."
+
 [http]
 # this is used for a private dashboard.. and some endpoints for the agent
 host = "127.0.0.1"          # obviously recommended to keep it like that
@@ -87,7 +97,15 @@ allow_env_access = false         # never enable this unless you know why
 name = "Agent"
 prompt = "You are a helpful Discord agent." # prepended to the system prompt
 # optional: .prompt.txt in the project root is appended right after the prompt
-# (max 8000 chars). Handy for "how the agent talks" without touching config.
+# (capped at prompt_file_max_chars). Handy for "how the agent talks" without
+# touching config. The built-in operating rules are NOT configurable on
+# purpose: they enforce real tool calls and verified results.
+prompt_file_max_chars = 24000 # clamp 1000..120000
+# tool-call rounds per ask before the model is forced to give a text answer
+tool_rounds = 16 # clamp 1..64
+# output tokens per provider call; 0 = provider default (anthropic falls back
+# to 4096, its API requires a number)
+max_tokens = 0 # clamp 0..128000
 
 [agent.brain]
 # the agent's brain: rolling conversation memory + what it starts out liking.

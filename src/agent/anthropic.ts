@@ -18,8 +18,10 @@ export default class extends Brain implements Agent {
 		private models: Model[],
 		public sys_prompt: string,
 		tools: Tool[] = [],
-		private maxToolRoundtrips = 4,
-		log?: Logger
+		private maxToolRoundtrips = 16,
+		log?: Logger,
+		/** [agent].max_tokens: 0 = fall back to the API-safe default below */
+		private maxOutputTokens = 0
 	) {
 		super(db, tools);
 		this.prov = new Anthropic({ apiKey: api.apiKey, baseURL: api.baseUrl || undefined });
@@ -52,12 +54,12 @@ export default class extends Brain implements Agent {
 						}))
 					: undefined;
 
-			// 4096: a tool-heavy turn (args + result + answer) used to hit the old
-			// 2048 ceiling and get truncated mid-call
+			// anthropic requires an explicit number; 4096 is the floor that keeps
+			// a tool-heavy turn (args + result + answer) from truncating mid-call
 			const send = () =>
 				this.prov.messages.create({
 					model: model.name,
-					max_tokens: 4096,
+					max_tokens: this.maxOutputTokens > 0 ? this.maxOutputTokens : 4096,
 					system: systemPrompt,
 					messages,
 					tools: toolsDef,

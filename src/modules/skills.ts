@@ -105,7 +105,9 @@ export class SkillRegistry {
 				let fired: string | null = null;
 				if (trigger.startsWith('/') && trigger.endsWith('/') && trigger.length > 2) {
 					try {
-						if (new RegExp(trigger.slice(1, -1), 'i').test(message)) fired = trigger;
+						// extra safety net: a pattern that dodged the parse-time cap
+						// never reaches the engine (catastrophic backtracking)
+						if (trigger.length <= 122 && new RegExp(trigger.slice(1, -1), 'i').test(message)) fired = trigger;
 					} catch {
 						/* bad regex in config: skip it */
 					}
@@ -207,7 +209,13 @@ export function parseSkillSource(raw: string, filePath: string): LoadedSkill {
 	}
 	const name = String(meta.name ?? path.basename(filePath, '.md'));
 	if (!/^[a-z][a-z0-9_]{1,63}$/.test(name)) throw new ModuleError(`invalid skill name '${name}'`);
-	const triggers = Array.isArray(meta.triggers) ? meta.triggers.map(String) : [];
+	const triggers = (Array.isArray(meta.triggers) ? meta.triggers.map(String) : [])
+		.map((t) => t.trim())
+		.filter(Boolean)
+		// bounded: triggers run against every incoming message (regex ones are
+		// compiled each time), so neither the count nor the pattern may explode
+		.slice(0, 20)
+		.map((t) => t.slice(0, 120));
 	if (triggers.length === 0) throw new ModuleError(`skill '${name}' needs at least one trigger`);
 	const instructions = match[2].trim();
 	if (instructions.length === 0) throw new ModuleError(`skill '${name}' has no instructions body`);

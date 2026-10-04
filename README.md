@@ -70,6 +70,17 @@ execution_message = ":thinking: *Executing `[TOOL_NAME]`...*" # "" = off
 pings anyone, and a missing permission only means the progress message is
 skipped: the answer still lands.
 
+The wording of failures is configurable too (each capped at 500 chars, only
+`{error}` / `{service}` are substituted, raw internals never leak):
+
+```toml
+[general.errors]
+generic = "Something went wrong. The details are in the logs."
+tool = "tool error: {error}"
+external = ""            # provider outages; "" = use generic
+provider = "no LLM provider configured. Set [agent.providers] + [agent.models] ..."
+```
+
 ## Addons: agent capabilities
 
 Addons give the agent itself new powers the LLM calls during conversation:
@@ -130,7 +141,10 @@ from the config:
 ```toml
 [agent]
 prompt = "You are a helpful Discord agent."
-# .prompt.txt in the project root is appended right after this (max 8000 chars)
+# .prompt.txt in the project root is appended right after this
+prompt_file_max_chars = 24000 # cap for .prompt.txt (clamp 1000..120000)
+tool_rounds = 16              # tool-call rounds per ask (clamp 1..64)
+max_tokens = 0                # output tokens per call; 0 = provider default
 
 [agent.brain]
 memory = 30        # remembered conversation turns (0 = none, clamped to 0..200)

@@ -200,7 +200,15 @@ authentication and live updates:
   model edits its own tastes with `brain_set_preference` and keeps profiles
   with `brain_remember_person` / `brain_get_person`
 - `.prompt.txt` (project root) is appended to `[agent].prompt`, capped at
-  8000 chars: the place for "how the agent talks"
+  `[agent].prompt_file_max_chars` (default 24000, clamp 1000..120000): the
+  place for "how the agent talks"
+- a strict operating-rules block is baked into every system prompt (Discord,
+  cron, dashboard chat): act first and talk after, tool calls only through
+  the tool-calling interface (a typed-out call is text, not execution), check
+  real state before acting, never claim an unverified result, no permission
+  questions and no asking for facts the tools can look up, resume silently
+  after a failed turn. Deliberately NOT configurable: config tunes the
+  numbers (`tool_rounds`), never the rules
 - model routing heuristic: prompts that look like code (fences, `fn`/`def`/
   `function`, `console.log`, ...) go to the `coding` model, an explicit
   `model` option always wins, internal `agent.generate_*` calls are ephemeral
@@ -222,6 +230,11 @@ authentication and live updates:
 - per-section policies: http, fs, node, docker (the top level `[docker]` is
   the single docker config)
 - `[agent.brain]`: memory window, seed tastes/people, one-shot reset
+- `[agent]`: `prompt_file_max_chars`, `tool_rounds` (tool rounds per ask,
+  default 16), `max_tokens` (per provider call, 0 = provider default)
+- `[general.errors]`: wording for the failures the bot posts (`generic`,
+  `tool`, `external`, `provider`); each is a capped line and only `{error}` /
+  `{service}` are substituted, so raw internals can never leak into chat
 - capability switches, all strict booleans (only a real `true` enables them):
   `allow_tool_creation` / `allow_skill_creation` (manage_tool/manage_skill),
   `allow_repo_creation` / `allow_repo_deletion`, `allow_route_creation` +
@@ -248,8 +261,10 @@ authentication and live updates:
   interface, both with a tool round-trip loop (Anthropic feeds `tool_use`
   blocks back as `tool_result`s, and drops tools on the last round so the
   model is forced to answer in text). Both send an explicit `tool_choice:
-  auto` (some OpenAI-compatible gateways skip the tool schema without it) and
-  Anthropic runs with `max_tokens: 4096` so a tool-heavy turn is not cut off
+  auto` (some OpenAI-compatible gateways skip the tool schema without it).
+  The round budget is `[agent].tool_rounds` (default 16, clamp 1..64), and
+  output is capped by `[agent].max_tokens` (0 = provider default; Anthropic
+  then runs with 4096 so a tool-heavy turn is not cut off)
 - progress messages: each tool round calls `AskOptions.onToolCall` with the
   tool names before they run, and the bot turns that into the channel message
   configured as `[general].execution_message` (default `:thinking: *Executing
@@ -281,6 +296,9 @@ authentication and live updates:
 - `[general].execution_message` is a single capped line (control characters
   flattened) that renders straight into a Discord message, and the message it
   creates never pings anyone
+- `[general].errors` templates are capped (500 chars, control chars stripped)
+  and only interpolate `{error}` (a user-safe inner message) or `{service}`:
+  a raw cause or stack trace can never reach chat through them
 - tunnel services must be local (a tunnel can never proxy an arbitrary public
   host), published hostnames must be in `allowed_domains`
 - cron jobs are channel-pinned, capped, never overlap, and reply with pings

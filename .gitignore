@@ -72,6 +72,8 @@ web_modules/
 config.*
 !/src/**/*/config.ts
 !/src/**/*/config.test.ts
+# validation module: the config.* rule above would swallow it too
+!/src/**/*/config.validate.ts
 # tests live in src/tests: the config.* rule above would swallow ours
 !/src/tests/config.test.ts
 

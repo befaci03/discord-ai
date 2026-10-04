@@ -249,7 +249,8 @@ export async function handleApi(req: IncomingMessage, deps: DashboardDeps, path:
 				await db.recordToolRun({ tool: name, caller_id: "dashboard", success: 0, error: (err as Error).message.slice(0, 200), duration_ms: ms });
 				await db.audit({ actor_id: "dashboard", action: "tool.fail", target: name, details: "{}" });
 				live?.emit({ kind: "tool.run", tool: name, caller: "dashboard", ok: false, ms, error: (err as Error).message.slice(0, 120) });
-				return { status: 200, body: { ok: false, error: (err as Error).message } };
+				// capped like every other error we hand out: a tool error can be huge
+				return { status: 200, body: { ok: false, error: (err as Error).message.slice(0, 2000) } };
 			}
 		}
 

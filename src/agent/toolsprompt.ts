@@ -52,9 +52,9 @@ export function renderToolsBlock(callable: Tool[]): string {
 	const more = hidden > 0 ? `\n(+${hidden} more callable, not listed here)` : '';
 	return (
 		'\n### Tools you can call right now\n' +
-		'When a tool fits the request, CALL it through the tool-calling interface: do not describe what you would do, ' +
-		'do not write your own code for something a tool already does, and never invent a tool that is not listed here. ' +
-		'If a tool comes back with an error, fix the arguments and call it again instead of giving up. ' +
+		'When a tool fits the request, CALL it through the tool-calling interface: never describe what you would do instead, never write a call (tool name plus arguments) as plain text in your reply, never hand-write code for something a tool already does, and never invent a tool that is not listed here. ' +
+		'A call typed out as text is not a call: the work simply did not happen. ' +
+		'If a tool comes back with an error, fix the arguments and call it again (or take another path) instead of giving up, and never report a result for a tool you have not actually called in this turn. ' +
 		'If nothing fits, answer normally.\n' +
 		lines.join('\n') +
 		more +

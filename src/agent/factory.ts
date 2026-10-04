@@ -8,6 +8,7 @@ import OpenAIAgent from './openai.js';
 import AnthropicAgent from './anthropic.js';
 import { brainTools } from './brainfns.js';
 import { environmentBlock } from './envinfo.js';
+import { behaviorRules } from './rules.js';
 import { AppConfig } from '../utils/config.js';
 import { Logger } from '../utils/logger.js';
 import { AgentFunction, ToolContext } from '../modules/types.js';
@@ -55,25 +56,30 @@ export function llmAvailable(config: AppConfig): boolean {
 	return providerUsable(config.agent.providers, modelsCfg.default_model.provider);
 }
 
-/** Cap for the optional .prompt.txt persona, so a stray file can't bloat every request. */
-const PROMPT_FILE_CAP = 8000;
+/**
+ * Read a persona file and cap it at `cap` chars (the operator's
+ * [agent].prompt_file_max_chars, default 24k: a stray or hostile file must not
+ * bloat every single request). Exported for tests.
+ */
+export function readPromptFile(file: string, cap: number, log: Logger): string {
+	try {
+		if (!existsSync(file)) return '';
+		const text = readFileSync(file, 'utf-8').trim();
+		if (text.length === 0) return '';
+		if (text.length > cap) log.warn(`persona file ${path.basename(file)} is ${text.length} chars, truncated to ${cap}`);
+		return text.slice(0, cap);
+	} catch (err) {
+		log.warn(`could not read ${path.basename(file)}: ${(err as Error).message}`);
+		return '';
+	}
+}
 
 /**
  * Optional extra persona in .prompt.txt (project root). Added on top of
  * [agent].prompt: think of it as "how you talk", config as "what you are".
  */
-function loadPromptFile(log: Logger): string {
-	const file = path.join(process.cwd(), '.prompt.txt');
-	try {
-		if (!existsSync(file)) return '';
-		const text = readFileSync(file, 'utf-8').trim();
-		if (text.length === 0) return '';
-		if (text.length > PROMPT_FILE_CAP) log.warn(`.prompt.txt is ${text.length} chars, truncated to ${PROMPT_FILE_CAP}`);
-		return text.slice(0, PROMPT_FILE_CAP);
-	} catch (err) {
-		log.warn(`could not read .prompt.txt: ${(err as Error).message}`);
-		return '';
-	}
+function loadPromptFile(log: Logger, cap: number): string {
+	return readPromptFile(path.join(process.cwd(), '.prompt.txt'), cap, log);
 }
 
 /** Header args (string/number/boolean + disallow list) -> JSON schema. */
@@ -205,11 +211,15 @@ export function buildAgent(db: DB, config: AppConfig, tools: Tool[], log: Logger
 	if (missing.length > 0) log.info(`model types without a dedicated model (fall back to '${modelName}'): ${missing.join(', ')}`);
 
 	const log2 = log.child('agent');
-	const extraPersona = loadPromptFile(log2);
-	// identity, then the facts only the config knows (port ranges, sandbox
-	// policy, which creation switches are on) so the model stops guessing
-	const sysPrompt = `${config.agent.prompt}${extraPersona ? `\n${extraPersona}` : ''}\nYour name is ${config.agent.name}.\n${environmentBlock(config, { activeAddons })}`;
-	const agent = provider.apiType === 0 ? new AnthropicAgent(db, provider, models, sysPrompt, tools, 4, log2) : new OpenAIAgent(db, provider, models, sysPrompt, tools, 4, log2);
+	const extraPersona = loadPromptFile(log2, config.agent.promptFileMaxChars);
+	// identity, then the strict behavior rules, then the facts only the config
+	// knows (port ranges, sandbox policy, which creation switches are on) so
+	// the model stops guessing
+	const sysPrompt = `${config.agent.prompt}${extraPersona ? `\n${extraPersona}` : ''}\nYour name is ${config.agent.name}.\n${behaviorRules(config.agent.toolRounds)}${environmentBlock(config, { activeAddons })}`;
+	const rounds = config.agent.toolRounds;
+	const maxOut = config.agent.maxTokens;
+	const agent =
+		provider.apiType === 0 ? new AnthropicAgent(db, provider, models, sysPrompt, tools, rounds, log2, maxOut) : new OpenAIAgent(db, provider, models, sysPrompt, tools, rounds, log2, maxOut);
 	// the brain reads its shape from [agent.brain]: memory window, seed tastes,
 	// seeded people profiles, and the one-shot reset flag
 	agent.maxMemory = config.agent.brain.memory;

@@ -36,6 +36,14 @@
   the template is a single control-char-free line capped at config load, and
   send/edit/delete failures are logged without touching the real answer. An
   empty template turns the feature off entirely.
+- Error wording (`[general].errors`): the operator may reword the failures
+  the bot posts (`generic`, `tool`, `external`, `provider`), but the templates
+  are control-char-stripped and capped at config load, and only `{error}`
+  (an already user-safe message) and `{service}` (a provider name) are ever
+  substituted. A raw cause, stack trace or API key from `ExternalError` is
+  never rendered, no matter what the template says. The internal operating
+  rules (real tool calls, verified results) are code, not config, so they
+  cannot be weakened from `config.toml`.
 - Prompt hygiene: the per-ask context tells the model to treat message text,
   file contents, tool output and role names as data rather than instructions,
   and not to reveal the prompt. Profiles the brain saved about people are

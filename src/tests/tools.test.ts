@@ -2,13 +2,13 @@
 // stay invisible, and every docker op dies at the [docker].enabled gate.
 
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { loadConfig, resetConfigCache, AppConfig } from '../utils/config.js';
 import { ToolRegistry, runTool } from '../modules/tools.js';
 import { ToolContext } from '../modules/types.js';
-import { buildAgent, llmAvailable, registryToAgentTools } from '../agent/factory.js';
+import { buildAgent, llmAvailable, registryToAgentTools, readPromptFile } from '../agent/factory.js';
 import SQLiteDB from '../db/sqlite.js';
 import { Logger } from '../utils/logger.js';
 
@@ -156,5 +156,54 @@ describe('buildAgent wiring', () => {
 		// .prompt.txt (project root) is appended after the configured prompt
 		const extra = existsSync('.prompt.txt') ? readFileSync('.prompt.txt', 'utf-8').trim() : '';
 		if (extra) expect(brain.sys_prompt).toContain(extra.slice(0, 60));
+	});
+
+	test('tool rounds and output cap come from [agent], not a hardcoded 4', async () => {
+		const cfg: AppConfig = {
+			...config,
+			agent: {
+				...config.agent,
+				toolRounds: 7,
+				maxTokens: 1234,
+				providers: { openai: { api_type: 1, base_url: 'https://api.openai.com/v1', api_key: 'sk-test' } },
+				models: { ...config.agent.models, default_model: { provider: 'openai', model: 'gpt-test' } }
+			}
+		};
+		const agent = buildAgent(db, cfg, registryToAgentTools(registry, ctx, db), new Logger('error'));
+		const internals = agent as unknown as { maxToolRoundtrips: number; maxOutputTokens: number; sys_prompt: string };
+		expect(internals.maxToolRoundtrips).toBe(7);
+		expect(internals.maxOutputTokens).toBe(1234);
+		// the strict rules ride along in the system prompt, with the real budget
+		expect(internals.sys_prompt).toContain('### Operating rules (orders, not suggestions)');
+		expect(internals.sys_prompt).toContain('Tool rounds per turn are limited (7)');
+		expect(internals.sys_prompt).toContain('Never claim a result you did not verify');
+	});
+
+	test('the default build runs with 16 rounds and provider-chosen tokens', async () => {
+		const cfg: AppConfig = {
+			...config,
+			agent: {
+				...config.agent,
+				providers: { openai: { api_type: 1, base_url: 'https://api.openai.com/v1', api_key: 'sk-test' } },
+				models: { ...config.agent.models, default_model: { provider: 'openai', model: 'gpt-test' } }
+			}
+		};
+		const agent = buildAgent(db, cfg, registryToAgentTools(registry, ctx, db), new Logger('error'));
+		const internals = agent as unknown as { maxToolRoundtrips: number; maxOutputTokens: number };
+		expect(internals.maxToolRoundtrips).toBe(16);
+		expect(internals.maxOutputTokens).toBe(0);
+	});
+});
+
+describe('persona file cap', () => {
+	test('a persona file is capped at prompt_file_max_chars, short ones pass whole', () => {
+		const file = path.join(dir, 'persona.txt');
+		const log = new Logger('error');
+		writeFileSync(file, 'x'.repeat(30_000));
+		expect(readPromptFile(file, 24_000, log)).toHaveLength(24_000);
+		writeFileSync(file, 'short persona');
+		expect(readPromptFile(file, 24_000, log)).toBe('short persona');
+		// a missing file is not an error: the bot runs without one
+		expect(readPromptFile(path.join(dir, 'nope.txt'), 24_000, log)).toBe('');
 	});
 });

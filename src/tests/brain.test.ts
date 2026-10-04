@@ -164,8 +164,11 @@ describe('tool inventory in the prompt', () => {
 		// typed signatures: a bare name list gave no clue which arg is a string
 		expect(block).toContain('- fetch_json(url: str): Fetch a URL');
 		expect(block).toContain('- server_stats(): Overview');
-		expect(block).toContain('do not write your own code');
+		expect(block).toContain('never hand-write code for something a tool already does');
 		expect(block).toContain('fix the arguments and call it again');
+		// a call typed into the chat is text, not execution
+		expect(block).toContain('A call typed out as text is not a call');
+		expect(block).toContain('never report a result for a tool you have not actually called');
 	});
 
 	test('an empty toolbox says so instead of pretending', async () => {

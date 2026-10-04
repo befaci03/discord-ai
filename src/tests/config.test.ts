@@ -126,4 +126,55 @@ describe('[agent.brain] validation', () => {
 		expect(loadWith('[docker]\nallowed_volume_paths = ["./work", "/srv/data"]\n').docker.allowedVolumePaths).toEqual([path.resolve('work'), '/srv/data']);
 		expect(loadWith('[docker]\nbind_address = " 0.0.0.0 "\n').docker.bindAddress).toBe('0.0.0.0');
 	});
+
+	test('[agent] execution knobs ship with the documented defaults', () => {
+		const ex = loadConfig('example.config.toml');
+		expect(ex.agent.promptFileMaxChars).toBe(24000);
+		expect(ex.agent.toolRounds).toBe(16);
+		expect(ex.agent.maxTokens).toBe(0);
+	});
+
+	test('[agent].tool_rounds clamps to 1..64, junk falls back to 16', () => {
+		expect(loadWith('[agent]\ntool_rounds = 7\n').agent.toolRounds).toBe(7);
+		expect(loadWith('[agent]\ntool_rounds = 999\n').agent.toolRounds).toBe(64);
+		expect(loadWith('[agent]\ntool_rounds = 0\n').agent.toolRounds).toBe(16);
+		expect(loadWith('[agent]\ntool_rounds = "lots"\n').agent.toolRounds).toBe(16);
+	});
+
+	test('[agent] prompt budget and output cap clamp', () => {
+		// a tiny cap would silently eat every persona: floor it at 1000
+		expect(loadWith('[agent]\nprompt_file_max_chars = 500\n').agent.promptFileMaxChars).toBe(1000);
+		expect(loadWith('[agent]\nprompt_file_max_chars = 9999999\n').agent.promptFileMaxChars).toBe(120000);
+		expect(loadWith('[agent]\nmax_tokens = -5\n').agent.maxTokens).toBe(0);
+		expect(loadWith('[agent]\nmax_tokens = 4096\n').agent.maxTokens).toBe(4096);
+		expect(loadWith('[agent]\nmax_tokens = "huge"\n').agent.maxTokens).toBe(0);
+	});
+
+	test('[general.errors] defaults ship from the example file', () => {
+		const errs = loadConfig('example.config.toml').general.errors;
+		expect(errs.generic).toBe('Something went wrong. The details are in the logs.');
+		expect(errs.tool).toBe('tool error: {error}');
+		expect(errs.external).toBe('');
+		expect(errs.provider).toContain('[agent.providers]');
+	});
+
+	test('[general.errors] custom wording lands, junk falls back', () => {
+		const cfg = loadWith('[general.errors]\ntool = "boom: {error}"\nexternal = "{service} is down"\n');
+		expect(cfg.general.errors.tool).toBe('boom: {error}');
+		expect(cfg.general.errors.external).toBe('{service} is down');
+		expect(cfg.general.errors.generic).toBe('Something went wrong. The details are in the logs.');
+		// wrong type -> default instead of breaking the bot
+		expect(loadWith('[general.errors]\ngeneric = 42\n').general.errors.generic).toBe('Something went wrong. The details are in the logs.');
+		// an empty generic would post an empty error reply: refused
+		expect(loadWith('[general.errors]\ngeneric = ""\n').general.errors.generic).toBe('Something went wrong. The details are in the logs.');
+		// external empty IS meaningful ("use generic") and allowed
+		expect(loadWith('[general.errors]\nexternal = ""\n').general.errors.external).toBe('');
+		// control characters flattened, over-long capped at 500
+		expect(loadWith('[general.errors]\ntool = "a\\nb"\n').general.errors.tool).toBe('a b');
+		expect(loadWith('[general.errors]\nprovider = "' + 'y'.repeat(900) + '"\n').general.errors.provider).toHaveLength(500);
+		// a broken [general] section still boots with every default intact
+		const broken = loadWith('general = 5\n');
+		expect(broken.general.errors.tool).toBe('tool error: {error}');
+		expect(broken.general.execution_message).toBe(':thinking: *Executing `[TOOL_NAME]`...*');
+	});
 });

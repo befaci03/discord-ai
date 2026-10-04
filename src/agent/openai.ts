@@ -18,7 +18,9 @@ export default class extends Brain implements Agent {
 		public sys_prompt: string,
 		tools: Tool[] = [],
 		private maxToolRoundtrips = 16,
-		log?: Logger
+		log?: Logger,
+		/** [agent].max_tokens: 0 = leave the output cap to the provider */
+		private maxOutputTokens = 0
 	) {
 		super(db, tools);
 		this.prov = new OpenAI({ apiKey: api.apiKey, baseURL: api.baseUrl || undefined });
@@ -48,6 +50,9 @@ export default class extends Brain implements Agent {
 				const response = await this.prov.chat.completions.create({
 					messages,
 					model: model.name,
+					// 0 = provider default: some gateways/models reject max_tokens,
+					// so it is only sent when the operator asked for a cap
+					max_tokens: this.maxOutputTokens > 0 ? this.maxOutputTokens : undefined,
 					// explicit auto: some OpenAI-compatible gateways skip the tool
 					// schema entirely when tool_choice is left out
 					tool_choice: callable.length > 0 ? 'auto' : undefined,
