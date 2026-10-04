@@ -39,6 +39,14 @@ describe('dashboard inline script', () => {
 		expect(code).toContain('function disconnectWs');
 	});
 
+	test('a function of a disabled addon offers n/a, not a dead button', () => {
+		const code = inlineScript();
+		// enabling would be answered 409 by the API: never render a button
+		// that cannot work
+		expect(code).toContain('enable the addon first');
+		expect(code).toContain('internal: wired into the addon');
+	});
+
 	test('toggle buttons keep their quotes escaped', () => {
 		const html = renderDashboard();
 		// the old bug: `onclick="toggle('tool',...)"` built inside a single-quoted
@@ -46,5 +54,6 @@ describe('dashboard inline script', () => {
 		expect(html).toContain('toggle(&quot;tool&quot;');
 		expect(html).toContain('toggle(&quot;skill&quot;');
 		expect(html).toContain('toggle(&quot;addon&quot;');
+		expect(html).toContain('toggle(&quot;function&quot;');
 	});
 });

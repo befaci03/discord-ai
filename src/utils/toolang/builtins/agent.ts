@@ -11,6 +11,47 @@ class AgentError extends Error {
 	}
 }
 
+/**
+ * Rank documents against a query with the configured rerank model
+ * ([agent.models].rerank_model): POSTs to the provider's Cohere-style
+ * /rerank endpoint and returns [{ index, score }] best-first. Shared by the
+ * `agent.rerank` builtin and the llm_rerank agent tool. Never runs a chat
+ * turn, never leaks the key, caps query/documents/response.
+ */
+export async function rerankDocs(agent: Agent, query: unknown, documents: unknown): Promise<{ index: number; score: number }[]> {
+	const q = String(query ?? '').trim();
+	if (q.length === 0 || q.length > 4_000) throw new AgentError('agent.rerank: query must be 1..4000 chars');
+	if (!Array.isArray(documents)) throw new AgentError('agent.rerank: documents must be an array of strings');
+	const docs = documents.slice(0, 100).map((d) => String(d).slice(0, 4_000));
+	if (docs.length === 0) throw new AgentError('agent.rerank: documents must not be empty');
+	// getModel falls back to the default chat model, so check the TYPE:
+	// hitting a chat endpoint with /rerank would just 404 confusingly
+	const model = agent.getModel('rerank');
+	if (model.type !== 'rerank') throw new AgentError('agent.rerank: no rerank model configured ([agent.models].rerank_model)');
+	const url = model.provider.baseUrl.replace(/\/+$/, '') + '/rerank';
+	const res = await fetch(url, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json', 'authorization': `Bearer ${model.provider.apiKey}` },
+		body: JSON.stringify({ model: model.name, query: q, documents: docs, top_n: docs.length }),
+		signal: AbortSignal.timeout(30_000)
+	});
+	if (!res.ok) throw new AgentError(`agent.rerank: provider answered HTTP ${res.status}`);
+	if (Number(res.headers.get('content-length') ?? 0) > 2_000_000) throw new AgentError('agent.rerank: response too large');
+	let data: { results?: { index?: unknown; relevance_score?: unknown }[] };
+	try {
+		data = JSON.parse((await res.text()).slice(0, 2_000_000));
+	} catch {
+		throw new AgentError('agent.rerank: provider response is not JSON');
+	}
+	const results = (Array.isArray(data.results) ? data.results : [])
+		.map((r) => ({ index: Math.floor(Number(r.index)), score: Number(r.relevance_score) }))
+		.filter((r) => Number.isInteger(r.index) && r.index >= 0 && r.index < docs.length && Number.isFinite(r.score))
+		.sort((a, b) => b.score - a.score)
+		.slice(0, 100);
+	if (results.length === 0) throw new AgentError('agent.rerank: provider returned no usable results');
+	return results;
+}
+
 export function Agent(getAgent: () => Agent): Record<string, Function> {
 	const requireModel = (agent: Agent, type: 'image' | 'video' | 'tts' | 'stt') => {
 		// throws if the model isn't configured, so tools fail loudly instead of silently
@@ -49,45 +90,7 @@ export function Agent(getAgent: () => Agent): Record<string, Function> {
 			return await agent.ask(`Transcribe this audio: ${audioUrl}`, undefined, { ephemeral: true, model: 'stt' });
 		},
 
-		/**
-		 * Rank documents against a query with the configured rerank model
-		 * ([agent.models].rerank_model): POSTs to the provider's Cohere-style
-		 * /rerank endpoint and returns [{ index, score }] best-first. Never
-		 * runs a chat turn, never leaks the key, caps query/documents/response.
-		 */
-		rerank: async (query: unknown, documents: unknown) => {
-			const agent = getAgent();
-			const q = String(query ?? '').trim();
-			if (q.length === 0 || q.length > 4_000) throw new AgentError('agent.rerank: query must be 1..4000 chars');
-			if (!Array.isArray(documents)) throw new AgentError('agent.rerank: documents must be an array of strings');
-			const docs = documents.slice(0, 100).map((d) => String(d).slice(0, 4_000));
-			if (docs.length === 0) throw new AgentError('agent.rerank: documents must not be empty');
-			// getModel falls back to the default chat model, so check the TYPE:
-			// hitting a chat endpoint with /rerank would just 404 confusingly
-			const model = agent.getModel('rerank');
-			if (model.type !== 'rerank') throw new AgentError('agent.rerank: no rerank model configured ([agent.models].rerank_model)');
-			const url = model.provider.baseUrl.replace(/\/+$/, '') + '/rerank';
-			const res = await fetch(url, {
-				method: 'POST',
-				headers: { 'content-type': 'application/json', 'authorization': `Bearer ${model.provider.apiKey}` },
-				body: JSON.stringify({ model: model.name, query: q, documents: docs, top_n: docs.length }),
-				signal: AbortSignal.timeout(30_000)
-			});
-			if (!res.ok) throw new AgentError(`agent.rerank: provider answered HTTP ${res.status}`);
-			if (Number(res.headers.get('content-length') ?? 0) > 2_000_000) throw new AgentError('agent.rerank: response too large');
-			let data: { results?: { index?: unknown; relevance_score?: unknown }[] };
-			try {
-				data = JSON.parse((await res.text()).slice(0, 2_000_000));
-			} catch {
-				throw new AgentError('agent.rerank: provider response is not JSON');
-			}
-			const results = (Array.isArray(data.results) ? data.results : [])
-				.map((r) => ({ index: Math.floor(Number(r.index)), score: Number(r.relevance_score) }))
-				.filter((r) => Number.isInteger(r.index) && r.index >= 0 && r.index < docs.length && Number.isFinite(r.score))
-				.sort((a, b) => b.score - a.score)
-				.slice(0, 100);
-			if (results.length === 0) throw new AgentError('agent.rerank: provider returned no usable results');
-			return results;
-		}
+		/** rank documents with the rerank model; see rerankDocs above */
+		rerank: async (query: unknown, documents: unknown) => await rerankDocs(getAgent(), query, documents)
 	};
 }

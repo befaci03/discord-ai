@@ -70,6 +70,24 @@ export function validateConfig(cfg: AppConfig, defaults: AppConfig): void {
 	cfg.agent.toolCallsPerRound = Math.min(Math.max(Math.floor(Number(cfg.agent.toolCallsPerRound) || defaults.agent.toolCallsPerRound), 1), 15);
 	cfg.agent.maxTokens = Math.min(Math.max(Math.floor(Number(cfg.agent.maxTokens) || 0), 0), 5_000_000);
 
+	// capability switches in [agent]/[bot]: only a real boolean true turns
+	// them on (a truthy string from the file must never enable a feature)
+	cfg.agent.politeAnswerWhenHighUser = cfg.agent.politeAnswerWhenHighUser === true;
+	cfg.bot.answer_when_name_mention = cfg.bot.answer_when_name_mention === true;
+	if (typeof cfg.bot.channel_id === 'string') {
+		const cid = cfg.bot.channel_id.trim();
+		cfg.bot.channel_id = /^\d{17,20}$/.test(cid) ? cid : undefined;
+	}
+
+	// [agent.models]: the vision flag is a strict boolean when present (absent
+	// = auto-detect by model name); junk values are dropped, not coerced
+	const m = cfg.agent.models;
+	const cleanVision = (entry: { vision?: unknown } | undefined): void => {
+		if (entry && entry.vision !== undefined && typeof entry.vision !== 'boolean') delete entry.vision;
+	};
+	cleanVision(m?.default_model);
+	for (const list of [m?.coding_model]) if (Array.isArray(list)) list.forEach(cleanVision);
+
 	// toolang limits get clamped, never trusted raw
 	const t = cfg.agent.toolang;
 	t.maxLoopIterations = Math.min(Math.max(Math.floor(Number(t.maxLoopIterations) || 10_000), 10), 1_000_000);

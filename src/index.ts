@@ -43,7 +43,8 @@ async function main(): Promise<void> {
 			saveToggles({
 				tools: Object.fromEntries(tools.runtimeDisabledNames().map((n) => [n, false])),
 				skills: Object.fromEntries(skills.runtimeDisabledNames().map((n) => [n, false])),
-				addons: Object.fromEntries(addons.runtimeDisabledNames().map((n) => [n, false]))
+				addons: Object.fromEntries(addons.runtimeDisabledNames().map((n) => [n, false])),
+				functions: Object.fromEntries(addons.runtimeDisabledFunctionNames().map((n) => [n, false]))
 			});
 		} catch (err) {
 			log.warn(`could not persist toggles: ${(err as Error).message}`);
@@ -57,6 +58,10 @@ async function main(): Promise<void> {
 	// agentFunctions()/extraVars() are consumed)
 	for (const name of Object.keys(toggles.addons)) {
 		if (toggles.addons[name] === false) addons.setEnabled(name, false);
+	}
+	// per-function overrides too (internal/unknown names are no-ops)
+	for (const name of Object.keys(toggles.functions ?? {})) {
+		if (toggles.functions?.[name] === false) addons.setFunctionEnabled(name, false);
 	}
 	log.info(
 		`addons active: ${addonStats.loaded.join(', ') || '(none)'}` +
@@ -166,7 +171,7 @@ async function main(): Promise<void> {
 	// tool from the system prompt AND from the schema sent to the provider
 	if (agent) {
 		agent.toolFilter = (name: string) => {
-			if (name.startsWith('brain_') || name.startsWith('manage_')) return true; // agent-native tools, always there
+			if (name.startsWith('brain_') || name.startsWith('manage_') || name.startsWith('llm_')) return true; // agent-native tools, always there
 			if (tools.get(name) !== undefined) return tools.isEnabled(name); // a .tl tool
 			return addons.functionEnabled(name); // an addon function
 		};

@@ -54,6 +54,7 @@ export function renderToolsBlock(callable: Tool[]): string {
 		'\n### Tools you can call right now\n' +
 		'When a tool fits the request, CALL it through the tool-calling interface: never describe what you would do instead, never write a call (tool name plus arguments) as plain text in your reply, never hand-write code for something a tool already does, and never invent a tool that is not listed here. ' +
 		'A call typed out as text is not a call: the work simply did not happen. ' +
+		'If your environment block says manage_tool is AVAILABLE, a missing capability is a tool you CREATE with manage_tool (then call it), never one you type into the reply. ' +
 		'If a tool comes back with an error, fix the arguments and call it again (or take another path) instead of giving up, and never report a result for a tool you have not actually called in this turn. ' +
 		'If nothing fits, answer normally.\n' +
 		lines.join('\n') +

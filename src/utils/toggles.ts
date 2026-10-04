@@ -5,9 +5,10 @@
 //
 // Shape (validated on load, length-capped on save):
 // {
-//   "tools":   { "<name>": true|false },
-//   "skills":  { "<name>": true|false },
-//   "addons":  { "<name>": true|false }
+//   "tools":     { "<name>": true|false },
+//   "skills":    { "<name>": true|false },
+//   "addons":    { "<name>": true|false },
+//   "functions": { "<fn name>": true|false }  (per addon function)
 // }
 // Every entry is a pure runtime override: nothing here disables loading, it
 // only sets the initial runtime state after the registries finish loading.
@@ -25,6 +26,8 @@ export interface ToggleFile {
 	tools: Record<string, boolean>;
 	skills: Record<string, boolean>;
 	addons: Record<string, boolean>;
+	/** per addon-function overrides (optional: older files have no section) */
+	functions?: Record<string, boolean>;
 }
 
 /** Where the toggle file lives (project root /modules/config.json). */
@@ -43,7 +46,7 @@ function validSection(raw: unknown): Record<string, boolean> {
 
 /** Read + validate. Corrupt or oversized files are ignored (fresh start), never fatal. */
 export function loadToggles(file: string = toggleFilePath()): ToggleFile {
-	const empty: ToggleFile = { tools: {}, skills: {}, addons: {} };
+	const empty: ToggleFile = { tools: {}, skills: {}, addons: {}, functions: {} };
 	if (!existsSync(file)) return empty;
 	try {
 		if (statSync(file).size > MAX_FILE_BYTES) {
@@ -55,6 +58,7 @@ export function loadToggles(file: string = toggleFilePath()): ToggleFile {
 			tools: validSection(parsed.tools),
 			skills: validSection(parsed.skills),
 			addons: validSection(parsed.addons),
+			functions: validSection(parsed.functions),
 		};
 	} catch (err) {
 		console.warn(`[toggles] ignoring corrupt '${file}': ${(err as Error).message}`);
@@ -76,7 +80,7 @@ export function saveToggles(toggles: ToggleFile, file: string = toggleFilePath()
 		return out;
 	};
 	const data = JSON.stringify(
-		{ tools: section(toggles.tools), skills: section(toggles.skills), addons: section(toggles.addons) },
+		{ tools: section(toggles.tools), skills: section(toggles.skills), addons: section(toggles.addons), functions: section(toggles.functions ?? {}) },
 		null,
 		"\t",
 	);

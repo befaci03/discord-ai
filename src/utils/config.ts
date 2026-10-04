@@ -70,8 +70,9 @@ export interface AgentProviderConfig {
 
 export interface AgentModelsConfig {
 	use_same_models: boolean;
-	default_model: { provider: string; model: string };
-	coding_model: { enabled: boolean; provider: string; model: string }[];
+	/** optional vision override: true/false, omit = auto-detect by model name */
+	default_model: { provider: string; model: string; vision?: boolean };
+	coding_model: { enabled: boolean; provider: string; model: string; vision?: boolean }[];
 	image_model: { enabled: boolean; provider: string; model: string }[];
 	video_model: { enabled: boolean; provider: string; model: string }[];
 	tts_model: { enabled: boolean; provider: string; model: string }[];
@@ -117,6 +118,9 @@ export interface AgentConfig {
 	toolCallsPerRound: number;
 	/** output tokens per provider call; 0 = provider default (max 5M) */
 	maxTokens: number;
+	/** Whether to answer politely when the user got elevated permissions */
+	politeAnswerWhenHighUser: boolean;
+
 	brain: BrainConfig;
 	providers: Record<string, AgentProviderConfig>;
 	models: AgentModelsConfig;
@@ -167,7 +171,9 @@ export interface BotConfig {
 	token: string;
 	client_id: string;
 	guild_id?: string;
+	channel_id?: string;
 	status: string;
+	answer_when_name_mention: boolean;
 }
 
 /** Housekeeping knobs that do not belong to any one section. */
@@ -200,7 +206,7 @@ export interface AppConfig {
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
-	bot: { token: '', client_id: '', status: 'watching the server burn' },
+	bot: { token: '', client_id: '', status: 'watching the server burn', answer_when_name_mention: false },
 	general: {
 		execution_message: ':thinking: *Executing `[TOOL_NAME]`...*',
 		errors: { ...DEFAULT_ERROR_TEMPLATES }
@@ -231,6 +237,7 @@ export const DEFAULT_CONFIG: AppConfig = {
 		toolRounds: 24,
 		toolCallsPerRound: 10,
 		maxTokens: 0,
+		politeAnswerWhenHighUser: false,
 		brain: { memory: 30, likes: [], dislikes: [], favorites: [], pending: [], people: {}, reset: false },
 		providers: {},
 		models: {

@@ -1,7 +1,7 @@
 // uses openai
 
 import { OpenAI } from 'openai';
-import { ChatCompletion, ChatCompletionMessageParam } from 'openai/resources';
+import { ChatCompletion, ChatCompletionMessageParam, ChatCompletionContentPart } from 'openai/resources';
 import DB from '../db/struct.js';
 import Agent, { AskOptions, Brain, Provider, Model, ModelType, Tool } from './struct.js';
 import { Logger } from '../utils/logger.js';
@@ -42,7 +42,15 @@ export default class extends Brain implements Agent {
 			// identity + brain + tool inventory, then the situational context
 			const base = this.sys_prompt + suffix + this.toolsBlock();
 			const history: ChatCompletionMessageParam[] = ephemeral ? [] : this.historyMessages().map((t) => ({ role: t.role, content: t.content }) as ChatCompletionMessageParam);
-			const messages: ChatCompletionMessageParam[] = [{ role: 'system', content: base + (system ?? '') }, ...history, { role: 'user', content: prompt }];
+			// images ride along only when the CHOSEN model takes image input;
+			// otherwise they are dropped (never a reason to fail the whole ask)
+			const images = opts?.images?.length ? opts.images : [];
+			if (images.length > 0 && model.vision !== true) {
+				this.log.info(`dropping ${images.length} image attachment(s): model '${model.name}' has no vision`);
+			}
+			const userContent: string | ChatCompletionContentPart[] =
+				images.length > 0 && model.vision === true ? [{ type: 'text', text: prompt }, ...images.map((u) => ({ type: 'image_url' as const, image_url: { url: u } }))] : prompt;
+			const messages: ChatCompletionMessageParam[] = [{ role: 'system', content: base + (system ?? '') }, ...history, { role: 'user', content: userContent }];
 
 			// tool loop: let the model call our tools, feed results back, repeat
 			// (only tools that are still enabled: toggles apply immediately)

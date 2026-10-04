@@ -69,6 +69,12 @@ export interface AgentFunction {
 	execute: (args: Record<string, unknown>) => Promise<unknown>;
 	/** true for anything that mutates external state (issues, stars, posts...) */
 	dangerous?: boolean;
+	/**
+	 * true = the addon needs this function for its own wiring: it stays
+	 * callable but NEVER appears in the function-toggle list (toggling it
+	 * would break the addon).
+	 */
+	internal?: boolean;
 }
 
 /**
@@ -98,4 +104,6 @@ export interface AddonStatus {
 	/** false when disabled at runtime from the dashboard (functions are refused) */
 	enabled?: boolean;
 	error?: string;
+	/** per-function runtime state for the dashboard toggles */
+	functionStates?: { name: string; enabled: boolean; internal: boolean }[];
 }

@@ -7,7 +7,9 @@ import Agent, { Model, ModelType, Provider, Tool } from './struct.js';
 import OpenAIAgent from './openai.js';
 import AnthropicAgent from './anthropic.js';
 import { brainTools } from './brainfns.js';
+import { llmTools } from './llmtools.js';
 import { environmentBlock } from './envinfo.js';
+import { supportsVision } from './vision.js';
 import { behaviorRules } from './rules.js';
 import { AppConfig } from '../utils/config.js';
 import { Logger } from '../utils/logger.js';
@@ -183,8 +185,15 @@ export function buildAgent(db: DB, config: AppConfig, tools: Tool[], log: Logger
 		apiKey: pcfg.api_key
 	};
 
-	const mkModel = (type: ModelType, name: string, prov: Provider = provider): Model => ({ type, provider: prov, name });
-	const models: Model[] = [mkModel('default', modelName)];
+	// vision: explicit config flag wins, else a conservative name heuristic
+	// (see agent/vision.ts: a false positive would fail the whole request)
+	const mkModel = (type: ModelType, name: string, prov: Provider = provider, vision?: boolean): Model => ({
+		type,
+		provider: prov,
+		name,
+		vision: vision ?? supportsVision(name)
+	});
+	const models: Model[] = [mkModel('default', modelName, provider, modelsCfg.default_model.vision)];
 
 	if (!modelsCfg.use_same_models) {
 		// per-type model lists. Missing/disabled/unconfigured types fall back
@@ -192,7 +201,7 @@ export function buildAgent(db: DB, config: AppConfig, tools: Tool[], log: Logger
 		// misconfigured entry (unknown provider, empty name) is reported once
 		// at startup so the user can fix the config.
 		for (const { key, type } of MODEL_TYPE_KEYS) {
-			const list = modelsCfg[key as keyof typeof modelsCfg] as { enabled: boolean; provider: string; model: string }[] | undefined;
+			const list = modelsCfg[key as keyof typeof modelsCfg] as { enabled: boolean; provider: string; model: string; vision?: boolean }[] | undefined;
 			const entry = list?.find((m) => m?.enabled && String(m.model ?? '').trim());
 			if (!entry) continue; // no configured model for this type: stays on the default
 			if (!providerUsable(providers, entry.provider)) {
@@ -201,11 +210,16 @@ export function buildAgent(db: DB, config: AppConfig, tools: Tool[], log: Logger
 			}
 			const pcfg2 = providers[entry.provider];
 			models.push(
-				mkModel(type, String(entry.model).trim(), {
-					apiType: pcfg2.api_type === 0 ? 0 : 1,
-					baseUrl: pcfg2.base_url ?? '',
-					apiKey: pcfg2.api_key
-				})
+				mkModel(
+					type,
+					String(entry.model).trim(),
+					{
+						apiType: pcfg2.api_type === 0 ? 0 : 1,
+						baseUrl: pcfg2.base_url ?? '',
+						apiKey: pcfg2.api_key
+					},
+					entry.vision
+				)
 			);
 		}
 	}
@@ -231,7 +245,13 @@ export function buildAgent(db: DB, config: AppConfig, tools: Tool[], log: Logger
 	agent.maxMemory = config.agent.brain.memory;
 	agent.seed = config.agent.brain;
 	agent.reseed = config.agent.brain.reset;
+	// dedicated coding model = the default model stays master of the
+	// conversation and delegates code work through the llm_code tool
+	agent.dedicatedCodingModel = models.some((m) => m.type === 'coding');
 	// personality tools belong to this instance: bind them now that it exists
 	tools.push(...brainTools(agent));
+	// model-type tools (llm_gen_image/video/audio, llm_transcribe, llm_rerank,
+	// llm_code): one per type that actually has a configured model
+	tools.push(...llmTools(agent, models));
 	return agent;
 }

@@ -18,6 +18,8 @@ export class AddonRegistry {
 	private errors = new Map<string, string>();
 	/** runtime overrides set from the dashboard (win over config at runtime) */
 	private runtimeDisabled = new Set<string>();
+	/** per-FUNCTION runtime overrides (the owning addon must stay enabled too) */
+	private functionDisabled = new Set<string>();
 
 	constructor(private config: AppConfig) {}
 
@@ -40,12 +42,67 @@ export class AddonRegistry {
 		return [...this.runtimeDisabled];
 	}
 
-	/** True when the named agent function's owning addon is enabled right now. */
-	functionEnabled(fnName: string): boolean {
-		for (const [name, addon] of this.active) {
-			if (addon.functions.some((f) => f.name === fnName)) return !this.runtimeDisabled.has(name);
+	/** The function's definition, if any active addon owns it. */
+	private findFunction(fnName: string): { addonName: string; fn: AgentFunction } | null {
+		for (const [addonName, addon] of this.active) {
+			const fn = addon.functions.find((f) => f.name === fnName);
+			if (fn) return { addonName, fn };
 		}
-		return false;
+		return null;
+	}
+
+	/** True when the named agent function exists on an active addon. */
+	hasFunction(fnName: string): boolean {
+		return this.findFunction(fnName) !== null;
+	}
+
+	/** True when the function is addon wiring that must never be toggled off. */
+	isInternalFunction(fnName: string): boolean {
+		return this.findFunction(fnName)?.fn.internal === true;
+	}
+
+	/**
+	 * The active addon that owns fnName, or null. Functions are addon-scoped:
+	 * a function is only callable while its owner is enabled, so callers that
+	 * flip one need to know (and can say) which addon gates it.
+	 */
+	functionOwner(fnName: string): string | null {
+		return this.findFunction(fnName)?.addonName ?? null;
+	}
+
+	/**
+	 * Per-function runtime toggle (dashboard): needs the owning addon enabled,
+	 * refuses unknown and internal functions (returns null for both, the
+	 * caller tells them apart via hasFunction/isInternalFunction).
+	 */
+	setFunctionEnabled(fnName: string, enabled: boolean): boolean | null {
+		const found = this.findFunction(fnName);
+		if (!found || found.fn.internal === true) return null;
+		if (enabled) this.functionDisabled.delete(fnName);
+		else this.functionDisabled.add(fnName);
+		return this.isFunctionEnabled(fnName);
+	}
+
+	/** Function-level names disabled at runtime only (dashboard toggles). */
+	runtimeDisabledFunctionNames(): string[] {
+		return [...this.functionDisabled];
+	}
+
+	/**
+	 * True when the function is callable right now: owning addon enabled AND
+	 * the function itself not toggled off. Internal functions ignore the
+	 * function switch on purpose.
+	 */
+	isFunctionEnabled(fnName: string): boolean {
+		const found = this.findFunction(fnName);
+		if (!found) return false;
+		if (this.runtimeDisabled.has(found.addonName)) return false;
+		return found.fn.internal === true || !this.functionDisabled.has(fnName);
+	}
+
+	/** True when the named agent function is callable right now. */
+	functionEnabled(fnName: string): boolean {
+		return this.isFunctionEnabled(fnName);
 	}
 
 	/**
@@ -127,7 +184,8 @@ export class AddonRegistry {
 					description: addon.description,
 					functions: addon.functions.map((f) => f.name),
 					configured: true,
-					enabled: this.isEnabled(name)
+					enabled: this.isEnabled(name),
+					functionStates: addon.functions.map((f) => ({ name: f.name, enabled: this.isFunctionEnabled(f.name), internal: f.internal === true }))
 				});
 				continue;
 			} else {

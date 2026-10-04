@@ -4,12 +4,14 @@
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { Readable } from 'node:stream';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { loadConfig, resetConfigCache } from '../utils/config.js';
 import { ToolRegistry } from '../modules/tools.js';
 import { SkillRegistry } from '../modules/skills.js';
 import { AddonRegistry } from '../modules/addons.js';
+import { AddonStatus } from '../modules/types.js';
 import SQLiteDB from '../db/sqlite.js';
 import { DashboardDeps, handleApi } from '../dashboard/handlers.js';
 
@@ -88,5 +90,103 @@ describe('/api/status', () => {
 		// an unexpanded ${VAR} reference is not a key
 		expect(await llm(withKey('${OPENAI_API_KEY}'))).toBe('off');
 		expect(await llm(withKey('sk-test'))).toBe('configured');
+	});
+});
+
+// The four toggle kinds share ONE handler. These cover the regressions the
+// split `function` path shipped with: a truthy non-boolean used to count as
+// "disable", and enabling a function of a disabled addon returned ok + wrote a
+// `function.enable` audit row for a state that never happened.
+describe('runtime toggles', () => {
+	/** POST a JSON body: readApiBody consumes the request as a stream. */
+	const post = (pathName: string, body: unknown, d: DashboardDeps = deps) => handleApi(Readable.from([Buffer.from(JSON.stringify(body))]) as never, d, pathName, 'POST');
+	const get = (pathName: string, d: DashboardDeps = deps) => handleApi({ headers: {} } as never, d, pathName, 'GET');
+
+	/** Fresh registries, so one test's flips can never leak into the next. */
+	async function fresh(overrides: Partial<DashboardDeps> = {}): Promise<DashboardDeps> {
+		const addons = new AddonRegistry(deps.config);
+		await addons.loadAll();
+		return { ...deps, addons, ...overrides };
+	}
+
+	const functionState = async (d: DashboardDeps, name: string): Promise<boolean | undefined> => {
+		const body = (await get('/api/addons', d)).body as AddonStatus[];
+		return body[0]?.functionStates?.find((f) => f.name === name)?.enabled;
+	};
+
+	test('a function toggle flips exactly one addon function', async () => {
+		const d = await fresh();
+		expect(await functionState(d, 'weather_now')).toBe(true);
+
+		const off = await post('/api/functions/toggle', { name: 'weather_now', enabled: false }, d);
+		expect(off.status).toBe(200);
+		expect((off.body as { enabled: boolean }).enabled).toBe(false);
+		expect(await functionState(d, 'weather_now')).toBe(false);
+		expect(await functionState(d, 'weather_forecast')).toBe(true); // sibling untouched
+
+		const on = await post('/api/functions/toggle', { name: 'weather_now', enabled: true }, d);
+		expect(on.status).toBe(200);
+		expect(await functionState(d, 'weather_now')).toBe(true);
+	});
+
+	test('enabled must be a real boolean, never guessed from truthiness', async () => {
+		const d = await fresh();
+		// regression: `enabled === true` turned the string "true" (and 1) into a
+		// DISABLE of whatever the name pointed at
+		const res = await post('/api/functions/toggle', { name: 'weather_now', enabled: 'true' }, d);
+		expect(res.status).toBe(400);
+		expect((res.body as { error: string }).error).toContain('enabled must be');
+		expect(await functionState(d, 'weather_now')).toBe(true); // untouched
+
+		const tools = new ToolRegistry(deps.config);
+		tools.loadAll();
+		const tool = tools.all()[0]?.name;
+		expect(tool).toBeTruthy();
+		expect((await post('/api/tools/toggle', { name: tool!, enabled: 1 }, d)).status).toBe(400);
+		expect(tools.isEnabled(tool!)).toBe(true);
+	});
+
+	test('a function of a disabled addon is refused, not silently pretended', async () => {
+		const d = await fresh();
+		expect((await post('/api/addons/toggle', { name: 'weather', enabled: false }, d)).status).toBe(200);
+		const enablesBefore = (await d.db.recentAudit(50)).filter((r) => r.action === 'function.enable' && r.target === 'weather_now').length;
+
+		const res = await post('/api/functions/toggle', { name: 'weather_now', enabled: true }, d);
+		expect(res.status).toBe(409);
+		expect((res.body as { error: string }).error).toContain("addon 'weather' is disabled");
+		// no audit row for an enable that did not happen
+		const enablesAfter = (await d.db.recentAudit(50)).filter((r) => r.action === 'function.enable' && r.target === 'weather_now').length;
+		expect(enablesAfter).toBe(enablesBefore);
+		expect(await functionState(d, 'weather_now')).toBe(false);
+
+		// switching it OFF is still allowed: that state really is in effect
+		expect((await post('/api/functions/toggle', { name: 'weather_now', enabled: false }, d)).status).toBe(200);
+	});
+
+	test('unknown and internal functions get different answers', async () => {
+		const d = await fresh();
+		expect((await post('/api/functions/toggle', { name: 'nope_nope', enabled: true }, d)).status).toBe(404);
+
+		// internal = "wired into the addon": 400 with its own wording, no registry write
+		const internal = {
+			...d,
+			addons: { hasFunction: () => true, isInternalFunction: () => true } as unknown as AddonRegistry
+		};
+		const res = await post('/api/functions/toggle', { name: 'weather_now', enabled: false }, internal);
+		expect(res.status).toBe(400);
+		expect((res.body as { error: string }).error).toContain('internal');
+	});
+
+	test('tools and addons keep working through the same handler', async () => {
+		const tools = new ToolRegistry(deps.config);
+		tools.loadAll();
+		const d = await fresh({ tools });
+		const tool = tools.all()[0]?.name!;
+		expect((await post('/api/tools/toggle', { name: tool, enabled: false }, d)).status).toBe(200);
+		expect(tools.isEnabled(tool)).toBe(false);
+		expect((await post('/api/tools/toggle', { name: tool, enabled: true }, d)).status).toBe(200);
+		expect(tools.isEnabled(tool)).toBe(true);
+		// unknown names still 404 on every kind
+		expect((await post('/api/addons/toggle', { name: 'nope', enabled: false }, d)).status).toBe(404);
 	});
 });

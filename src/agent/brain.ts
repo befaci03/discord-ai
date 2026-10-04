@@ -92,6 +92,13 @@ export class Brain {
 	/** tools this agent may call: kept here so the prompt can list them per ask */
 	protected tools: Tool[];
 	/**
+	 * true when a DEDICATED coding model exists (use_same_models false + a
+	 * coding_model entry): code-looking prompts then stay with the default
+	 * master model, which delegates through the llm_code tool instead of
+	 * handing the whole conversation over. Set by buildAgent.
+	 */
+	dedicatedCodingModel = false;
+	/**
 	 * runtime tool filter, set by index.ts: a tool toggled off in the dashboard
 	 * disappears from BOTH the system prompt and the schema sent to the model,
 	 * instead of being listed and then refused.
@@ -226,9 +233,16 @@ export class Brain {
 
 	// ---------------- model routing ----------------
 
-	/** Pick the model type for a prompt: explicit choice wins, else code detection. */
+	/**
+	 * Pick the model type for a prompt: an explicit choice always wins. With a
+	 * dedicated coding model the DEFAULT model stays master of the whole
+	 * conversation (coding work goes through the llm_code tool); without one
+	 * the code-looking heuristic routes the turn, which costs nothing because
+	 * coding then resolves to the same default model anyway.
+	 */
 	routeModel(prompt: string, forced?: ModelType): ModelType {
 		if (forced) return forced;
+		if (this.dedicatedCodingModel) return 'default';
 		return looksLikeCode(prompt) ? 'coding' : 'default';
 	}
 

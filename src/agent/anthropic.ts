@@ -45,6 +45,15 @@ export default class extends Brain implements Agent {
 			// identity + brain + tool inventory, then the situational context
 			const systemPrompt = this.sys_prompt + suffix + this.toolsBlock() + (system ?? '');
 			const messages: Anthropic.MessageParam[] = ephemeral ? [{ role: 'user', content: prompt }] : this.mergeTurns([...this.historyMessages(), { role: 'user', content: prompt }]);
+			// images ride along only when the CHOSEN model takes image input;
+			// the prompt message stays at this index while the tool loop appends
+			const images = opts?.images?.length ? opts.images : [];
+			if (images.length > 0 && model.vision !== true) {
+				this.log.info(`dropping ${images.length} image attachment(s): model '${model.name}' has no vision`);
+			}
+			const promptIdx = messages.length - 1;
+			const imgBlocks: Anthropic.ContentBlockParam[] | null =
+				images.length > 0 && model.vision === true ? [{ type: 'text', text: prompt }, ...images.map((u) => ({ type: 'image' as const, source: { type: 'url' as const, url: u } }))] : null;
 			// only tools that are still enabled: dashboard toggles apply immediately
 			const callable = this.callableTools();
 			let toolsDef =
@@ -63,7 +72,7 @@ export default class extends Brain implements Agent {
 					model: model.name,
 					max_tokens: this.maxOutputTokens > 0 ? this.maxOutputTokens : 4096,
 					system: systemPrompt,
-					messages,
+					messages: imgBlocks ? messages.map((m, i) => (i === promptIdx ? { role: m.role, content: imgBlocks } : m)) : messages,
 					tools: toolsDef,
 					tool_choice: toolsDef ? { type: 'auto' } : undefined
 				});

@@ -275,6 +275,16 @@ function renderManager() {
 			(a.configured
 				? '<button class="tgl' + (enabled ? ' on' : '') + '" onclick="toggle(&quot;addon&quot;,&quot;' + esc(a.name) + '&quot;,' + (!enabled) + ')">' + (enabled ? 'on' : 'off') + '</button>'
 				: '<span class="bad" title="' + esc(a.error || 'not configured') + '">off</span>'));
+		// per-function toggles. A function is only callable while its addon is
+		// on, so a dead "on" button (the API answers 409) is replaced by n/a.
+		for (const f of a.functionStates || []) {
+			const control = f.internal
+				? '<span class="dim" title="internal: wired into the addon">locked</span>'
+				: !enabled
+					? '<span class="dim" title="enable the addon first">n/a</span>'
+					: '<button class="tgl' + (f.enabled ? ' on' : '') + '" onclick="toggle(&quot;function&quot;,&quot;' + esc(f.name) + '&quot;,' + (!f.enabled) + ')">' + (f.enabled ? 'on' : 'off') + '</button>';
+			rows.push('<div class="mrow"><span class="name' + (f.enabled ? '' : ' off') + '">fn: ' + esc(f.name) + '</span>' + control);
+		}
 	}
 	$("manager").innerHTML = rows.length === 0 ? '<span class="dim">nothing loaded</span>' : rows.join("");
 	// refresh the runner dropdown to only show enabled tools

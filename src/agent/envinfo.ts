@@ -5,6 +5,7 @@
 // is reported, the value never is).
 
 import { AppConfig } from '../utils/config.js';
+import { supportsVision } from './vision.js';
 
 /** Raw addon settings are untyped on purpose (see config.addons). */
 function addonSection(config: AppConfig, name: string): Record<string, unknown> {
@@ -142,6 +143,15 @@ export function environmentBlock(config: AppConfig, opts: EnvInfoOptions = {}): 
 	// budgets + dashboard
 	lines.push(
 		`- tool budget: up to ${config.agent.toolCallsPerRound} tool calls run per round, a single call times out after ${t.toolTimeoutMs}ms and its result reaches you truncated at 40k chars.`
+	);
+
+	// vision: does an attached image actually reach the model?
+	const dm = config.agent.models?.default_model;
+	const vision = dm?.vision ?? supportsVision(dm?.model ?? '');
+	lines.push(
+		vision
+			? '- vision: ON. Image attachments on a message are sent to your default model for analysis.'
+			: '- vision: OFF. Image attachments are dropped (your default model has no vision; set [agent.models].default_model.vision = true to force it).'
 	);
 	lines.push(`- dashboard: http://${publicHost(config.http.host)}:${config.http.port} (private, passcode protected).`);
 	lines.push(`- addons active: ${[...active].join(', ') || 'none'}.`);

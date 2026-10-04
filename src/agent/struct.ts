@@ -17,6 +17,12 @@ export interface AskOptions {
 	/** numeric Discord id of the speaker: their saved profile is injected into the system prompt */
 	speakerId?: string;
 	/**
+	 * https image URLs (Discord CDN attachments) sent with the prompt so a
+	 * vision-capable model can analyze them. Dropped (with a log line) when
+	 * the chosen model has no vision, never an error.
+	 */
+	images?: string[];
+	/**
 	 * Called once per tool round with the tool names the model is about to
 	 * call (before they run), so the caller can show progress. Never throws
 	 * into the loop: a broken hook is swallowed.
@@ -36,6 +42,8 @@ export interface Model {
 	type: ModelType;
 	provider: Provider;
 	name: string;
+	/** true = this model accepts image input (config flag or name heuristic) */
+	vision?: boolean;
 }
 
 export interface ToolCallRequest {

@@ -13,6 +13,7 @@ import { ToolContext } from './modules/types.js';
 import { LiveBus } from './dashboard/live.js';
 import { ExecutionStatus, ExecMessageLike } from './execution.js';
 import { detectFakeToolCalls, stripFakeToolCalls } from './agent/fakecalls.js';
+import { pickImageUrls } from './agent/vision.js';
 import Agent, { Tool } from './agent/struct.js';
 
 export interface BotDeps {
@@ -85,13 +86,25 @@ export async function startBot(deps: BotDeps): Promise<Client> {
 	client.on(Events.MessageCreate, async (message: Message) => {
 		try {
 			if (message.author.bot) return;
-			if (!message.mentions.has(client.user as never)) return;
+			// answer when mentioned, or (opt-in) when the agent's name is said:
+			// the flag used to be inverted, which ignored exactly those messages
+			const mentioned = message.mentions.has(client.user as never);
+			const agentName = String(config.agent.name ?? '')
+				.trim()
+				.toLowerCase();
+			const named = config.bot.answer_when_name_mention === true && agentName.length > 0 && message.content.toLowerCase().includes(agentName);
+			if (!mentioned && !named) return;
 
 			// optional guild scoping: when guild_id is set, ignore other guilds
 			if (config.bot.guild_id && message.guildId !== config.bot.guild_id) return;
+			// optional channel scoping: when channel_id is set, ignore other channels
+			if (config.bot.channel_id && message.channelId !== config.bot.channel_id) return;
 
 			const content = message.content.replace(/<@!?[0-9]+>/g, '').trim();
 			if (content.length === 0 || content.length > 2000) return; // length limit on untrusted input
+			// image attachments: https Discord-CDN image URLs only, capped; the
+			// agent forwards them only to a vision-capable model (see agent/vision.ts)
+			const images = pickImageUrls([...message.attachments.values()].map((a) => ({ contentType: a.contentType, url: a.url })));
 
 			await db.upsertUser({ id: message.author.id, username: message.author.username });
 
@@ -131,7 +144,7 @@ export async function startBot(deps: BotDeps): Promise<Client> {
 			const skillPrompt = skills.promptFor(content);
 			// active skill instructions, the skill directory, then who is talking
 			// and what the bot may actually do here
-			const system = [skillPrompt, skills.overview(), discordContext(message)].filter((s) => s.trim().length > 0).join('\n\n');
+			const system = [skillPrompt, skills.overview(), discordContext(config, message)].filter((s) => s.trim().length > 0).join('\n\n');
 			// "Executing ..." progress message: sent on the first tool round,
 			// edited on every following one, deleted before the final reply
 			type Sendable = { send: (payload: { content: string; allowedMentions: typeof NO_PINGS }) => Promise<ExecMessageLike> };
@@ -151,7 +164,8 @@ export async function startBot(deps: BotDeps): Promise<Client> {
 			try {
 				const completion = await agent.ask(content, system, {
 					speakerId: message.author.id,
-					onToolCall: (names) => exec.update(names)
+					onToolCall: (names) => exec.update(names),
+					images
 				});
 				reply = completion.choices[0]?.message?.content ?? '';
 			} finally {
@@ -161,7 +175,7 @@ export async function startBot(deps: BotDeps): Promise<Client> {
 			if (typeof reply === 'string' && reply.length > 0) {
 				// fake tool calls typed into the text: never shown to the user,
 				// flagged in the log/audit so the operator sees the model slipping
-				const knownTool = (n: string): boolean => tools.has(n) || /^(brain|manage|tunnel|cron|github|smtp|email)_/.test(n);
+				const knownTool = (n: string): boolean => tools.has(n) || /^(brain|manage|llm|tunnel|cron|github|smtp|email)_/.test(n);
 				const detected = detectFakeToolCalls(reply, knownTool);
 				if (detected.length > 0) {
 					log.warn(`model wrote ${detected.length} text-style tool call(s) as plain text (${detected.slice(0, 5).join(', ')}): stripped from the reply`);
@@ -209,7 +223,7 @@ export async function startBot(deps: BotDeps): Promise<Client> {
  * The model has no other way to introspect Discord permissions, so it used to
  * happily promise kicks and embeds it cannot send.
  */
-export function discordContext(message: Message): string {
+export function discordContext(config: AppConfig, message: Message): string {
 	const lines: string[] = [];
 	const ch = message.channel as { name?: string; permissionsFor?: (member: unknown) => { toArray(): string[] } | null };
 	const where = ch.name ? `#${ch.name}` : 'direct messages';
@@ -226,7 +240,9 @@ export function discordContext(message: Message): string {
 
 	// operating notes: things the model cannot discover on its own
 	lines.push(
-		'Reply in Discord markdown, under 2000 characters (longer replies get cut off). ' + 'You only see messages where you were mentioned, not the rest of the channel: ask when context is missing.'
+		'Reply in Discord markdown, under 2000 characters (longer replies get cut off). ' +
+			'You only see messages where you were mentioned, not the rest of the channel: ask when context is missing. ' +
+			'Image attachments on a message are sent to you for analysis when your model supports vision; otherwise they are dropped silently.'
 	);
 	lines.push(
 		'For tasks: use your tools FIRST, then answer. Never send a plan, a permission question or a description of what you are about to do without doing it in the same reply. ' +
@@ -246,7 +262,7 @@ export function discordContext(message: Message): string {
 	}
 
 	// who you are talking to: roles + the elevated rights that change how you reply
-	if (message.member) {
+	if (message.member && config.agent.politeAnswerWhenHighUser) {
 		const roles = message.member.roles.cache
 			.map((r) => r.name)
 			.filter((n) => n !== '@everyone')

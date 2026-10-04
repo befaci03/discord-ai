@@ -2,7 +2,10 @@
 token = "${DISCORD_TOKEN}"          # or set DISCORD_TOKEN env var
 client_id = "${DISCORD_CLIENT_ID}"
 guild_id = ""                       # optional: scope slash commands to one guild
+channel_id = ""                     # optional: scope slash commands to one channel and make the agent only answer here
 status = "watching the server burn" # presence text
+# optional: when true, the bot will answer when they will say the agent's name, will do the same thing as mentioning the bot
+answer_when_name_mention = false
 
 [general]
 # shown in the channel while the agent works through tool calls: sent on the
@@ -113,6 +116,8 @@ tool_calls_per_round = 10 # clamp 1..15
 # output tokens per provider call; 0 = provider default (anthropic falls back
 # to 4096, its API requires a number)
 max_tokens = 0 # clamp 0..5000000
+# if the user has elevated privileges, treat the user accordingly
+polite_answer_when_high_user = true
 
 [agent.brain]
 # the agent's brain: rolling conversation memory + what it starts out liking.
@@ -170,11 +175,14 @@ anthropic = { api_type = 0, base_url = "https://api.anthropic.com", api_key = "$
 gemini = { api_type = 1, base_url = "https://generativelanguage.googleapis.com/v1beta/openai", api_key = "${GEMINI_API_KEY}" }
 
 [agent.models]
-use_same_models = true                                         # will always use the default model
+use_same_models = false # will always use the default model
+# vision = true/false forces image attachments on/off (omit = auto by model name)
 default_model = { provider = "openai", model = "gpt-4o-mini" }
 # if false, will use the default
 coding_model = [{ enabled = true, provider = "openai", model = "gpt-4o-mini" }]
 # if false/enabled=false, any x features won't be available
+# (each ENABLED type below also exposes a matching llm_gen_* / llm_transcribe /
+#  llm_rerank / llm_code tool to the model; the coding type exposes llm_code)
 image_model = [{ enabled = false, provider = "gemini", model = "nano-banana" }]   # Image Generation
 video_model = [{ enabled = false, provider = "gemini", model = "little-banana" }] # Video Generation
 tts_model = [{ enabled = false, provider = "openai", model = "tts-1" }]           # Text-to-Speech

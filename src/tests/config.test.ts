@@ -28,7 +28,9 @@ describe('config key mapping', () => {
 		const cfg = loadConfig('example.config.toml');
 		expect(cfg.http.passcode_env).toBe('DASHBOARD_PASSCODE');
 		expect(cfg.bot.guild_id).toBe('');
-		expect(cfg.agent.models.use_same_models).toBe(true);
+		// the example's VALUE is an operator choice (it ships flipped both ways):
+		// what must hold is that the snake_case key survives the loader as itself
+		expect(typeof cfg.agent.models.use_same_models).toBe('boolean');
 	});
 
 	test("the example's creation flags land on the real switches", () => {
@@ -85,6 +87,19 @@ describe('[agent.brain] validation', () => {
 	test('reset only flips on a real boolean true', () => {
 		expect(loadWith('[agent.brain]\nreset = true\n').agent.brain.reset).toBe(true);
 		expect(loadWith('[agent.brain]\nreset = "yes"\n').agent.brain.reset).toBe(false);
+	});
+
+	test('capability switches only flip on a real boolean true', () => {
+		// both live OUTSIDE [agent.brain] but share this loader helper on purpose:
+		// they are the same class of strict-boolean switch
+		expect(loadWith('[agent]\npolite_answer_when_high_user = true\n').agent.politeAnswerWhenHighUser).toBe(true);
+		expect(loadWith('[agent]\npolite_answer_when_high_user = "yes"\n').agent.politeAnswerWhenHighUser).toBe(false);
+		expect(loadWith('[bot]\nanswer_when_name_mention = "true"\n').bot.answer_when_name_mention).toBe(false);
+	});
+
+	test('a junk channel_id is dropped instead of matching nothing forever', () => {
+		expect(loadWith('[bot]\nchannel_id = "123456789012345678"\n').bot.channel_id).toBe('123456789012345678');
+		expect(loadWith('[bot]\nchannel_id = "general"\n').bot.channel_id).toBeUndefined();
 	});
 
 	test('seeded people get normalized profiles', () => {

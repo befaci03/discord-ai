@@ -27,7 +27,7 @@ export interface DashboardDeps {
 	/** live event bus, optional in tests */
 	live?: LiveBus;
 	/** called after a successful toggle, so runtime state can be persisted */
-	onToggle?: (kind: "tool" | "skill" | "addon", name: string, enabled: boolean) => void;
+	onToggle?: (kind: ToggleKind, name: string, enabled: boolean) => void;
 }
 
 export interface ApiResult {
@@ -55,16 +55,23 @@ export function readApiBody(req: IncomingMessage): Promise<string> {
 	});
 }
 
+/** Every kind the dashboard can flip at runtime; each maps to one registry. */
+export type ToggleKind = "tool" | "skill" | "addon" | "function";
+
+const NAME_RE = /^[a-z][a-z0-9_]{1,63}$/;
+
 /**
- * Handle POST /api/{tools,skills,addons}/toggle.
+ * Handle POST /api/{tools,skills,addons,functions}/toggle.
  * Body: { name: string, enabled: boolean }. Runtime overrides are persisted to
  * modules/config.json (so they survive restarts) and audited + broadcast live.
+ *
+ * `function` flips ONE addon function (same path as the other kinds, so the
+ * schema, audit line and persistence cannot drift apart). A function is only
+ * callable while its owning addon is on, so enabling it against a disabled
+ * addon is refused with 409 instead of returning `ok` for a state that is not
+ * in effect: the audit line must never claim an enable that did not happen.
  */
-async function handleToggle(
-	deps: DashboardDeps,
-	req: IncomingMessage,
-	kind: "tool" | "skill" | "addon",
-): Promise<ApiResult> {
+async function handleToggle(deps: DashboardDeps, req: IncomingMessage, kind: ToggleKind): Promise<ApiResult> {
 	let body: Record<string, unknown>;
 	try {
 		body = JSON.parse(await readApiBody(req) || "{}") as Record<string, unknown>;
@@ -72,12 +79,28 @@ async function handleToggle(
 		return { status: 400, body: { error: "invalid JSON body" } };
 	}
 	const name = String(body.name ?? "").trim();
-	const enabled = body.enabled === true;
-	if (!/^[a-z][a-z0-9_]{1,63}$/.test(name)) return { status: 400, body: { error: "invalid name" } };
+	// schema before business logic: a truthy string used to count as "disable"
+	if (typeof body.enabled !== "boolean") return { status: 400, body: { error: "enabled must be true or false" } };
+	const enabled = body.enabled;
+	if (!NAME_RE.test(name)) return { status: 400, body: { error: "invalid name" } };
 
-	const registry = kind === "tool" ? deps.tools : kind === "skill" ? deps.skills : deps.addons;
-	const newState = registry.setEnabled(name, enabled);
-	if (newState === null) return { status: 404, body: { error: `unknown ${kind} '${name}'` } };
+	let newState: boolean | null;
+	if (kind === "function") {
+		// unknown vs internal are different answers: the dashboard shows the
+		// second as "wired into the addon", not as a broken button
+		if (!deps.addons.hasFunction(name)) return { status: 404, body: { error: `unknown function '${name}'` } };
+		if (deps.addons.isInternalFunction(name)) return { status: 400, body: { error: `function '${name}' is internal and cannot be toggled` } };
+		const owner = deps.addons.functionOwner(name);
+		if (enabled && owner && !deps.addons.isEnabled(owner)) {
+			return { status: 409, body: { error: `addon '${owner}' is disabled: enable it first` } };
+		}
+		newState = deps.addons.setFunctionEnabled(name, enabled);
+		if (newState === null) return { status: 404, body: { error: `unknown function '${name}'` } };
+	} else {
+		const registry = kind === "tool" ? deps.tools : kind === "skill" ? deps.skills : deps.addons;
+		newState = registry.setEnabled(name, enabled);
+		if (newState === null) return { status: 404, body: { error: `unknown ${kind} '${name}'` } };
+	}
 
 	deps.onToggle?.(kind, name, enabled);
 	await deps.db.audit({ actor_id: "dashboard", action: `${kind}.${enabled ? "enable" : "disable"}`, target: name, details: "{}" });
@@ -216,6 +239,11 @@ export async function handleApi(req: IncomingMessage, deps: DashboardDeps, path:
 		case "/api/addons/toggle": {
 			if (method !== "POST") return { status: 405, body: { error: "use POST" } };
 			return await handleToggle(deps, req, "addon");
+		}
+
+		case "/api/functions/toggle": {
+			if (method !== "POST") return { status: 405, body: { error: "use POST" } };
+			return await handleToggle(deps, req, "function");
 		}
 
 		case "/api/run": {
