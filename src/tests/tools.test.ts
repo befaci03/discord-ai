@@ -2,7 +2,7 @@
 // stay invisible, and every docker op dies at the [docker].enabled gate.
 
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { loadConfig, resetConfigCache, AppConfig } from '../utils/config.js';
@@ -117,7 +117,6 @@ describe('LLM exposure', () => {
 		expect(await failureOf('docker_exec', { container: 'web', command: 42 })).toContain('must be a string');
 	});
 });
-
 describe('docker gate', () => {
 	test('no docker call happens while [docker].enabled is false', async () => {
 		expect(config.docker.enabled).toBe(false);
@@ -257,5 +256,33 @@ describe('optional header args', () => {
 		const parsed = parseToolSource(src);
 		expect(parsed.header.arguments[0].optional).toBe(true);
 		expect(parsed.code.trim()).toBe('return(1)');
+	});
+});
+
+describe('volume wiring (config to store)', () => {
+	test('a volume id travels config -> tools.ts -> evaluator -> builtin and lands in <fs.root>/.docker-vols', async () => {
+		// the full chain, not just the builtin: if the policy never carries
+		// volumeRoot the mount dies with "unavailable", and if nobody resolves
+		// the id no directory appears. The denylisted image proves the volume
+		// was resolved BEFORE any docker CLI call (buildCreateArgs checks
+		// volumes first), so this test never touches a real daemon.
+		const sandboxRoot = path.join(dir, 'sandbox');
+		const cfg: AppConfig = {
+			...config,
+			docker: { ...config.docker, enabled: true },
+			agent: { ...config.agent, toolang: { ...config.agent.toolang, fs: { ...config.agent.toolang.fs, root: sandboxRoot } } }
+		};
+		const reg = new ToolRegistry(cfg);
+		reg.loadAll();
+		const localCtx: ToolContext = { config: cfg, log: () => undefined };
+		let msg = '';
+		try {
+			await runTool(reg, 'docker_create', { name: 'volwired', image: 'ftp', port: 0, volume: 'wiredvol', volume_path: '' }, localCtx);
+		} catch (err) {
+			msg = (err as Error).message;
+		}
+		expect(msg).toContain('disallowed'); // volume resolved, image refused
+		expect(msg).not.toContain('unavailable'); // ...with the store configured
+		expect(statSync(path.join(sandboxRoot, '.docker-vols', 'wiredvol')).isDirectory()).toBe(true);
 	});
 });
