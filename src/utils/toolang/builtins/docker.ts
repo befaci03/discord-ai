@@ -475,6 +475,21 @@ export function Docker(getPolicy: () => DockerPolicy): Record<string, Function> 
 	return {
 		// read-only overview: name, image and status of every container
 		list: () => d(['ps', '-a', '--format', '{{.Names}}\t{{.Image}}\t{{.Status}}'], 'list'),
+		// local images: repository:tag, id and size (tab separated)
+		images: () => d(['images', '--format', '{{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.Size}}'], 'images'),
+		// pull goes through the same allow/deny lists as create
+		pull: (image: unknown) => d(['pull', checkImage(String(image ?? ''), gate('pull'), 'pull')], 'pull'),
+		// boolean probes for tool scripts: missing container OR dead daemon = false
+		exists: (container: unknown) => {
+			gate('exists');
+			const r = d(['inspect', '-f', '{{.Id}}', checkName(container, 'exists')], 'exists');
+			return r.exitCode === 0 && r.stdout.length > 0;
+		},
+		is_running: (container: unknown) => {
+			gate('is_running');
+			const r = d(['inspect', '-f', '{{.State.Running}}', checkName(container, 'is_running')], 'is_running');
+			return r.exitCode === 0 && r.stdout === 'true';
+		},
 		run: (container: string, cmd: string) => {
 			gate('run'); // fail fast, before checkName/argv work
 			const name = checkName(container, 'run');

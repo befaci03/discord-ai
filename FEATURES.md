@@ -32,14 +32,15 @@ has a JSON tool header, then a `¤` delimiter, then the program body.
 | `math` | rand, randInt, clamp, min/max, abs, round/floor/ceil, sqrt, pow, log, trig, PI, E |
 | `time` | now, timestamp, iso, from/to ISO, utc fields, humanize, uptime |
 | `codec` | base64/hex/url codecs, sha1/sha256/... hashing, secure random tokens, uuid v4 |
+| `regex` | test/match/matchAll/replace with ReDoS guards: pattern <= 300 chars, text <= 50k, 1000 matches max, flag allowlist, quantified-group shapes like `(a+)+` / `(a|aa)+` refused |
 | `fs` | sandboxed filesystem jailed to a configurable root, symlink-escape detection, write toggles, no-clobber writes |
 | `log` | info/warn/error/debug with size caps |
 | `node` | `child_proc.run` with command denylist/allowlist and no shell, bcrypt helpers |
 | `Array` | slice, push, length, range, repeat |
 | `Object` | keys/values/entries/fromEntries/merge/freeze |
-| `docker` | container lifecycle behind image/port allowlists and name validation, plus `docker.list()` (name/image/status of every container). Every op is refused unless `[docker].enabled = true`, honors `docker.host` and `max_containers`. Published ports bind to `[docker].bind_address` (default `127.0.0.1`; loopback/private/`0.0.0.0` only), host bind-mounts need `[docker].allowed_volume_paths` (empty = no mounts at all), agent volumes mount from `<fs.root>/.docker-vols/<volume_id>` with no allowlist entry (`docker.attach` mounts one into an existing container) |
+| `docker` | container lifecycle behind image/port allowlists and name validation, plus `docker.list()` / `docker.images()` (tab separated), `docker.pull()` (allow/deny lists first), `docker.exists()` / `docker.is_running()` boolean probes, `docker.run()` with quote-aware argv (no shell). Every op is refused unless `[docker].enabled = true`, honors `docker.host` and `max_containers`. Published ports bind to `[docker].bind_address` (default `127.0.0.1`; loopback/private/`0.0.0.0` only), host bind-mounts need `[docker].allowed_volume_paths` (empty = no mounts at all), agent volumes mount from `<fs.root>/.docker-vols/<volume_id>` with no allowlist entry (`docker.attach` mounts one into an existing container, `docker.detach` drops it again, `docker.cp` copies one file across the boundary with fs-jail + size caps) |
 | `discord` | messages, embeds, reactions, polls, channels, roles, members, events (needs a client) |
-| `agent` | text/image/audio/video generation, transcription (needs an agent) |
+| `agent` | text/image/audio/video generation, transcription, `rerank(query, documents)` against `[agent.models].rerank_model` (Cohere-style `/rerank`, returns `[{ index, score }]` best-first) (needs an agent) |
 | `sys` | read-only host info (hostname, mem, cpus); env lookups by exact name only |
 | `env` | environment access, fully disabled unless skills.allow_env_access = true; secrets redacted from listings |
 | addon modules | addons can also inject TooLang modules (see below) |

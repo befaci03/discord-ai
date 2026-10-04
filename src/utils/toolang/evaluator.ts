@@ -13,6 +13,7 @@ import { NodeJS as nodejsModule } from './builtins/node.js';
 import { math as mathModule } from './builtins/math.js';
 import { time as timeModule } from './builtins/time.js';
 import { codec as codecModule } from './builtins/codec.js';
+import { regex as regexModule } from './builtins/regex.js';
 import { fs as fsModule } from './builtins/fs.js';
 import { log as logModule } from './builtins/log.js';
 import { sys as sysModule } from './builtins/sys.js';
@@ -476,6 +477,7 @@ export class Evaluator {
 		this.vars.set('math', mathModule());
 		this.vars.set('time', timeModule());
 		this.vars.set('codec', codecModule());
+		this.vars.set('regex', regexModule());
 		this.vars.set('fs', fsModule(this.ctx.config));
 		this.vars.set('log', logModule());
 		this.vars.set('sys', sysModule());

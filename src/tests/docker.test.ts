@@ -33,6 +33,10 @@ describe('docker enabled gate', () => {
 		const d = Docker(() => policy());
 		const ops: [string, () => unknown][] = [
 			['list', () => d.list()],
+			['pull', () => d.pull('nginx:alpine')],
+			['images', () => d.images()],
+			['exists', () => d.exists('web')],
+			['is_running', () => d.is_running('web')],
 			['run', () => d.run('web', 'ls -la')],
 			['create', () => d.create('web', { image: 'nginx:alpine' })],
 			['remove', () => d.remove('web')],
@@ -224,6 +228,27 @@ describe('docker.run argv splitting', () => {
 		const d = Docker(() => policy({ enabled: true }));
 		expect(errorOf(() => d.run('web', '   '))).toContain('must contain a command');
 		expect(errorOf(() => d.run('web', ''))).toContain('non-empty');
+	});
+});
+
+describe('pull and the boolean probes', () => {
+	test('pull runs the image allow/deny lists before the CLI', () => {
+		const d = Docker(() => policy({ enabled: true }));
+		expect(errorOf(() => d.pull('ftp:latest'))).toContain('disallowed');
+		expect(errorOf(() => d.pull('ssh'))).toContain('disallowed');
+		expect(errorOf(() => d.pull(''))).toContain('invalid image');
+		// an allowlist, when set, beats everything else
+		const only = Docker(() => policy({ enabled: true, allowedImages: ['nginx:alpine'] }));
+		expect(errorOf(() => only.pull('redis:7'))).toContain('not in the allowed list');
+	});
+
+	test('exists/is_running answer false when docker or the container is missing', () => {
+		const d = Docker(() => policy({ enabled: true }));
+		expect(d.exists('web')).toBe(false); // no docker on this box: inspect fails
+		expect(d.is_running('web')).toBe(false);
+		// invalid names still die at the validator, not at the CLI
+		expect(errorOf(() => d.exists('bad;name'))).toContain('invalid container name');
+		expect(errorOf(() => d.is_running('bad name'))).toContain('invalid container name');
 	});
 });
 

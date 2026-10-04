@@ -428,10 +428,32 @@ Object.freeze(obj)    -> object (read-only)
 
 ### 16.12. `agent` and `db`
 
-`agent` exposes the running agent's capabilities. `db` exposes the configured
+`agent` exposes the running agent's capabilities: `generate_text`,
+`generate_image`, `generate_audio`, `generate_video`, `transcript(audio_url)`
+(each needs the matching model type configured, else it fails loudly) and
+`rerank(query, documents)` which posts to `[agent.models].rerank_model`'s
+`/rerank` endpoint and returns `[{ index, score }]` best-first.
+`db` exposes the configured
 database backend. Both are injected via `extraVars` for the duration of the tool
 run. Consult the `agent`/`db` module docs for their exact surfaces; they mirror
 the same `extraVars` contract.
+
+### 16.13. `regex` (guarded regular expressions)
+
+```tl
+regex.test(pattern, text, flags?)     -- boolean
+regex.match(pattern, text, flags?)    -- { match, index, groups } or null
+regex.matchAll(pattern, text, flags?) -- array of { match, index, groups } (capped at 1000)
+regex.replace(pattern, text, replacement, flags?) -- string ($1 group refs work)
+```
+
+Flags: `dgimsuy` only. Guards (patterns come from the model, and a running JS
+match cannot be interrupted): pattern <= 300 chars, text <= 50000 chars,
+1000 matches max, and patterns with a quantified group containing a
+quantifier or alternation (`(a+)+`, `(a|aa)+`) are refused as exponential
+backtracking. NOTE: in a .tl string literal a backslash escape eats the
+unknown letter (`"\\d"` in source becomes `d`): write `[0-9]` character
+classes, or double the backslash (`"\\\\d"`).
 
 ---
 

@@ -73,6 +73,34 @@ codec.uuid()               --= uuid v4
 
 ---
 
+## regex
+
+Guarded regular expressions (patterns come from the model, so the ReDoS
+guards are part of the contract): pattern <= 300 chars, text <= 50000 chars,
+1000 matches max, flags limited to `dgimsuy`, and patterns whose quantified
+group contains a quantifier or alternation (`(a+)+`, `(a|aa)+`) are refused
+as exponential backtracking. `matchAll`/`replace` imply `/g`.
+
+```tl
+regex.test(pattern, text, flags?)     --= boolean
+regex.match(pattern, text, flags?)    --= { match, index, groups } or null
+regex.matchAll(pattern, text, flags?) --= [{ match, index, groups }]
+regex.replace(pattern, text, replacement, flags?) --= string, $1 refs work
+```
+
+```tl
+set var hit to regex.match("([a-z]+)@[a-z]+", "mail bob@home")
+if hit != null then
+return(hit.groups[0])
+close
+```
+
+In a .tl string literal `\d` drops the backslash (unknown escape): use
+`[0-9]` classes or double the backslash (`"\\d"`). Tool ARGUMENT json keeps
+backslashes intact.
+
+---
+
 ## fs
 
 Sandboxed filesystem: every path is jailed inside the configured root,
@@ -197,6 +225,10 @@ the image allow/deny lists and `max_containers`.
 
 ```tl
 docker.list() --= name, image and status of every container (tab separated)
+docker.images() --= local images: repo:tag, id, size (tab separated)
+docker.pull(image) --= pull an image (runs the allow/deny lists first)
+docker.exists(container) --= boolean, false when container or daemon is gone
+docker.is_running(container) --= boolean
 docker.run(container, cmd) --= exec command in container (quotes group words,
                              --= e.g. sh -c 'echo a b'; argv only, no shell)
 docker.create(name, image, config?) --= create container
@@ -456,6 +488,8 @@ agent.generate_image(prompt)
 agent.generate_audio(prompt)
 agent.generate_video(prompt)
 agent.transcript(audio_url)
+agent.rerank(query, documents) --# [{ index, score }] best-first via the
+                               --# configured rerank model (/rerank endpoint)
 ```
 ```tl
 set var transcript to agent.transcript("https://...")
